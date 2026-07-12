@@ -1,4 +1,4 @@
-# open-checkpoints — persistent open-items startup reminder — Design
+# waypoints — persistent open-items startup reminder — Design
 
 **Date:** 2026-07-12
 **Status:** Approved (design)
@@ -8,7 +8,7 @@
 
 ## 1. Overview
 
-A Claude Code plugin that surfaces **open tasks / to-dos / checkpoints** as a SessionStart banner —
+A Claude Code plugin that surfaces **open tasks / to-dos / waypoints** as a SessionStart banner —
 the same `additionalContext` banner mechanism the `resume-interrupted` plugin uses — but as a
 **distinctly separate mechanism** with two crucial differences:
 
@@ -33,7 +33,7 @@ uninstalling the plugin via `/plugin`.
 
 Three units, each independently understandable/testable:
 
-- **Store** — `~/.claude/open-checkpoints.json`, a user-level file **outside** the versioned plugin
+- **Store** — `~/.claude/waypoints.json`, a user-level file **outside** the versioned plugin
   (so plugin updates/reinstalls never wipe it). Schema:
   ```json
   {
@@ -50,39 +50,39 @@ Three units, each independently understandable/testable:
     ]
   }
   ```
-- **Hook** — `hooks/open-checkpoints.py`, wired via `hooks/hooks.json` on `SessionStart` (matcher
+- **Hook** — `hooks/waypoints.py`, wired via `hooks/hooks.json` on `SessionStart` (matcher
   `startup`). Reads the store, keeps items where `done == false AND (surface_on is null OR
   surface_on <= today)`, and emits a banner via
   `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": <banner>}}`.
   Emits **nothing** when there are no surfaceable items (no empty banner). Never self-denoises.
   Fail-safe: any error → exit 0 with no output (never block a session).
-- **CLI** — `checkpoints.py` (shipped in the plugin, also runnable directly): `list`, `add`,
+- **CLI** — `waypoints.py` (shipped in the plugin, also runnable directly): `list`, `add`,
   `done <id>`, `prune` (remove done items). Atomic writes, schema validation, stable ids.
-- **Skill** — `skills/open-checkpoints/SKILL.md`: documents the store + CLI and the wrap-up tie-in.
+- **Skill** — `skills/waypoints/SKILL.md`: documents the store + CLI and the wrap-up tie-in.
 
-### Pure, unit-testable core (`checkpoints_core.py`)
+### Pure, unit-testable core (`waypoints_core.py`)
 `surfaceable(items, today) -> list`, `format_banner(items) -> str`, `add_item(...)`,
 `mark_done(items, id)`, `prune(items)`. No I/O, deterministic given an injected `today`.
 
 ## 4. Banner format
 
 ```
-⏳ Open checkpoints (N) — persist until marked done (`checkpoints done <id>`), or disable this plugin:
+⏳ Open waypoints (N) — persist until marked done (`waypoints done <id>`), or disable this plugin:
   • <title>  [<id>]
   • <title>  (since YYYY-MM-DD)  [<id>]
 ```
-Distinct label ("Open checkpoints") so it's never confused with the resume-interrupted banner.
+Distinct label ("Open waypoints") so it's never confused with the resume-interrupted banner.
 
 ## 5. Data flow
 
 - **Startup:** SessionStart → hook reads store → filters → emits banner (or nothing).
-- **Management:** the CLAUDE.md wrap-up rule (and the user) run `checkpoints add/done/prune`, or edit
+- **Management:** the CLAUDE.md wrap-up rule (and the user) run `waypoints add/done/prune`, or edit
   the JSON. Marking done is what removes an item from the banner.
 
 ## 6. Wrap-up tie-in + hybrid discovery (agent-side)
 
-The CLAUDE.md "Wrapping up — reconcile checkpoints" rule gains one step: reconcile the
-open-checkpoints store — `done` finished items, `add` newly-created follow-ups, and (the *hybrid*
+The CLAUDE.md "Wrapping up — reconcile waypoints" rule gains one step: reconcile the
+waypoints store — `done` finished items, `add` newly-created follow-ups, and (the *hybrid*
 part) sweep memories/project-notes for pending markers (`⏳`, `REMAINING`, `TODO`) not yet in the
 store and add them. This discovery is deliberately **agent-side at wrap-up**, never in the hook, so
 the startup banner stays precise and false-positive-free.
@@ -107,11 +107,11 @@ Seed with the currently-known open items, moving the *reminder* to the store as 
 
 - Unit (pytest): `surfaceable` (done + date boundaries incl. surface_on == today), `format_banner`
   (empty → no banner; dated vs undated), CLI `add/done/prune` on a temp store, schema round-trip.
-- Integration: run the hook against a fixture store with a fixed `OPEN_CHECKPOINTS_TODAY` override and
+- Integration: run the hook against a fixture store with a fixed `WAYPOINTS_TODAY` override and
   assert the emitted `additionalContext` JSON; run against an empty store and assert no output.
 
 ## 10. Publish
 
-Follow the canonical-marketplace workflow: `gh repo create haiggoh/open-checkpoints`, add ONE entry to
+Follow the canonical-marketplace workflow: `gh repo create haiggoh/waypoints`, add ONE entry to
 the sync repo's `marketplace.json`, push, `claude plugin marketplace update`, install. Bump
 `plugin.json` version on every change.
