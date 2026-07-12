@@ -121,8 +121,8 @@ def format_banner(items):
     if not items:
         return ""
     lines = [
-        f"🧭 waypoints: {len(items)} open waypoint(s) still ahead — they persist until reached; "
-        f"mark done with `waypoints done <id>`, or disable this plugin if unwanted:"
+        f"🧭 waypoints: {len(items)} open waypoint(s) still ahead — they persist until done. "
+        f"Just ask me to add or complete one; disable via /plugin if unwanted:"
     ]
     for i in items:
         since = f"  (since {i['created']})" if i.get("created") else ""

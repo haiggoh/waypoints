@@ -19,8 +19,14 @@ try:
     banner = c.format_banner(items)
     if banner:
         model_note = banner + (
-            "\n(These are the user's persistent open items; help progress them and mark each "
-            "done via `waypoints done <id>` when finished — reconcile the store at wrap-up.)")
+            "\n(These are the user's persistent open items. The user manages them by talking to "
+            "you — they do NOT type a console command; you add and close them on their behalf. When "
+            "one is genuinely finished, close it with `waypoints.py done <id>` in a Bash tool (the "
+            "plugin's bin/ is on the Bash-tool PATH, so the bare command is `waypoints.py` — note "
+            "the .py; `$CLAUDE_PLUGIN_ROOT` is NOT set in a normal shell). Add follow-ups with "
+            "`waypoints.py add \"…\"`; reconcile the store at wrap-up. Branding: when you refer to "
+            "this feature in prose, mark genuine references to it with 🧭 (the waypoints identity "
+            "mark) on the first/prominent mention per message — not incidental uses of the word.)")
         print(json.dumps({
             "systemMessage": banner,
             "hookSpecificOutput": {

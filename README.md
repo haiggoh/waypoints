@@ -11,7 +11,7 @@ At session start, a hook reads `~/.claude/waypoints.json`, keeps the items that 
 done** and **past any `surface_on` date**, and prints a banner:
 
 ```
-waypoints: Open waypoints (2) — these persist until marked done (`waypoints done <id>`), or disable this plugin if unwanted:
+🧭 waypoints: 2 open waypoint(s) still ahead — they persist until done. Just ask me to add or complete one; disable via /plugin if unwanted:
   • Publish the Adobe upstream PRs  (since 2026-07-12)  [adobe-publish]
   • Re-test cutouts on corporate wifi  (since 2026-07-12)  [corporate-wifi-retest]
 ```
@@ -20,14 +20,18 @@ If there are no surfaceable items, it prints nothing (no empty banner).
 
 ## Managing items
 
-Use the bundled CLI (or edit the JSON directly):
+You don't need a console command: **just ask Claude** to add, complete, or list waypoints — it
+surfaces the open ones each session and closes them for you (at the latest when you wrap up). Under
+the hood it uses the bundled CLI, which you can also run yourself (or edit the JSON directly):
 
 ```sh
-python3 "$CLAUDE_PLUGIN_ROOT/bin/waypoints.py" list
-python3 "$CLAUDE_PLUGIN_ROOT/bin/waypoints.py" add "Publish the PR" --detail "see repo X" --surface-on 2026-07-13
-python3 "$CLAUDE_PLUGIN_ROOT/bin/waypoints.py" done adobe-publish
-python3 "$CLAUDE_PLUGIN_ROOT/bin/waypoints.py" prune
+waypoints.py list
+waypoints.py add "Publish the PR" --detail "see repo X" --surface-on 2026-07-13
+waypoints.py done adobe-publish
+waypoints.py prune
 ```
+
+The command is `waypoints.py` (Claude Code v2.1.91+ adds the plugin's `bin/` to the Bash-tool PATH).
 
 `--surface-on` is the **earliest** date an item appears — **not an expiry**. An item surfaces on and
 after that date and keeps showing every session until you mark it done.

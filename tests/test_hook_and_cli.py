@@ -34,6 +34,20 @@ def test_hook_emits_additionalcontext_for_surfaceable(tmp_path):
     assert "Publish the PR" in ctx and "waypoint" in ctx.lower()
 
 
+def test_hook_usermsg_hides_cli_but_model_ctx_keeps_invocation_and_branding(tmp_path):
+    # UX: users manage waypoints by talking to Claude, not a console command. The visible
+    # systemMessage must not show a CLI invocation; the model-facing context must keep the
+    # correct one (`waypoints.py`, not bare `waypoints`) plus the 🧭 prose-branding instruction.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Publish the PR"], store, "2026-07-12")
+    payload = json.loads(_run([HOOK], store, "2026-07-12").stdout)
+    user_msg = payload["systemMessage"]
+    ctx = payload["hookSpecificOutput"]["additionalContext"]
+    assert "waypoints done" not in user_msg and "waypoints.py" not in user_msg
+    assert "waypoints.py done <id>" in ctx  # correct bare command via bin/ PATH injection
+    assert "🧭" in ctx and "prose" in ctx    # branding instruction ships to all users
+
+
 def test_hook_respects_future_surface_on(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Later thing", "--surface-on", "2026-07-13"], store, "2026-07-12")
