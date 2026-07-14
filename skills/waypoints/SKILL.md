@@ -17,11 +17,18 @@ cut-off session and self-denoises after a clean one), waypoints do **not** self-
 updates never touch it:
 ```json
 { "version": 1, "items": [
-  { "id": "kebab-slug", "title": "one-line (shown in banner)", "detail": "context / pointer",
+  { "id": "kebab-slug", "title": "one-line headline (banner)",
+    "summary": ["key point", "another"], "detail": "full continuity dump (on-demand only)",
     "surface_on": "YYYY-MM-DD or null", "created": "YYYY-MM-DD", "done": false } ] }
 ```
 `surface_on` is the **earliest** date an item appears — NOT an expiry. Undated items show every
 session; dated ones show on and after that date, and both persist until done.
+
+**Three tiers, so the banner stays tidy without discarding context:** `title` (headline, always
+shown) + `summary` (a few short bullets, shown under the title) + `detail` (the full dump, **never**
+in the banner — read on demand with `show`). Keep `title` short and push specifics into `--point`
+bullets; put the long "reconstitute this after a /clear" context in `--detail`. `id` and `created`
+are immutable across edits — a stable id is why `edit` exists.
 
 ## Managing waypoints
 
@@ -29,10 +36,16 @@ The user manages waypoints **by talking to you** — they do not type a console 
 close items on their behalf and surface the open ones in conversation. Use the bundled CLI:
 ```sh
 waypoints.py list                       # Claude Code v2.1.91+ puts the plugin's bin/ on the Bash-tool PATH
-waypoints.py add "Title" [--detail "…"] [--surface-on YYYY-MM-DD]
+waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on YYYY-MM-DD]
+waypoints.py edit <id> [--title "…"] [--point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on]
+waypoints.py show <id>                  # print title + summary + full detail (the "pick it up" view)
 waypoints.py done <id>                  # marking done removes it from the banner
 waypoints.py prune                      # drop done items
 ```
+Prefer **`edit`** to fix or enrich an existing item — it keeps the `id` and `created`. Never
+`done`+re-`add` to "update" (that regenerates the id, drops `created`, and leaves a false ✓). When
+picking an item back up, `show <id>` to read its full `detail` (the banner only carries title +
+summary bullets).
 The bare command is **`waypoints.py`** — that's the shipped filename; note the `.py` (bare
 `waypoints` will not resolve). If it isn't on PATH (older Claude Code), fall back to
 `python3 "$CLAUDE_PLUGIN_ROOT/bin/waypoints.py"` while a skill/hook is running, or edit

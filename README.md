@@ -13,6 +13,8 @@ done** and **past any `surface_on` date**, and prints a banner:
 ```
 🧭 waypoints: 2 open waypoint(s) still ahead — they persist until done. Just ask me to add or complete one; disable via /plugin if unwanted:
   • Publish the Adobe upstream PRs  (since 2026-07-12)  [adobe-publish]
+      - branch fix/place-image; re-verify live first
+      - decide: one PR or two
   • Re-test cutouts on corporate wifi  (since 2026-07-12)  [corporate-wifi-retest]
 ```
 
@@ -26,12 +28,19 @@ the hood it uses the bundled CLI, which you can also run yourself (or edit the J
 
 ```sh
 waypoints.py list
-waypoints.py add "Publish the PR" --detail "see repo X" --surface-on 2026-07-13
+waypoints.py add "Publish the PR" --point "branch fix/x" --point "re-verify first" --detail "see repo X" --surface-on 2026-07-13
+waypoints.py edit adobe-publish --title "Publish the PR (rebased)" --point "branch fix/x2"
+waypoints.py show adobe-publish     # title + summary + full detail — the "pick it up" view
 waypoints.py done adobe-publish
 waypoints.py prune
 ```
 
 The command is `waypoints.py` (Claude Code v2.1.91+ adds the plugin's `bin/` to the Bash-tool PATH).
+
+Each item has **three tiers** so the banner stays tidy without losing context: a short `title`
+(headline), a few `summary` bullets (`--point`, shown under the title), and a full `detail` dump
+(on-demand only — read it with `show`). Use `edit` to change an item **in place**: it keeps the `id`
+and `created` date, unlike a `done`+re-`add`.
 
 `--surface-on` is the **earliest** date an item appears — **not an expiry**. An item surfaces on and
 after that date and keeps showing every session until you mark it done.
@@ -43,7 +52,8 @@ plugin so updates/reinstalls never touch your data.
 
 ```json
 { "version": 1, "items": [
-  { "id": "adobe-publish", "title": "…", "detail": "…", "surface_on": null, "created": "2026-07-12", "done": false }
+  { "id": "adobe-publish", "title": "…", "summary": ["key point", "another"], "detail": "…",
+    "surface_on": null, "created": "2026-07-12", "done": false }
 ] }
 ```
 

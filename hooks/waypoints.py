@@ -24,7 +24,12 @@ try:
             "one is genuinely finished, close it with `waypoints.py done <id>` in a Bash tool (the "
             "plugin's bin/ is on the Bash-tool PATH, so the bare command is `waypoints.py` — note "
             "the .py; `$CLAUDE_PLUGIN_ROOT` is NOT set in a normal shell). Add follow-ups with "
-            "`waypoints.py add \"…\"`; reconcile the store at wrap-up. Branding: when you refer to "
+            "`waypoints.py add \"…\" [--point \"key pt\" ...]`; keep the banner tidy — a short title "
+            "plus a few `--point` bullets, with any long continuity dump in `--detail` (NOT shown in "
+            "the banner). To change an item, `waypoints.py edit <id> [--title …] [--point …]` in place "
+            "(keeps the id — never done+re-add, which loses the id/created). The banner shows only "
+            "title+summary; run `waypoints.py show <id>` to read an item's full detail when you pick "
+            "it up. Reconcile the store at wrap-up. Branding: when you refer to "
             "this feature in prose, mark genuine references to it with 🧭 (the waypoints identity "
             "mark) on the first/prominent mention per message — not incidental uses of the word.)")
         print(json.dumps({

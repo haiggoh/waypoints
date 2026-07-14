@@ -80,3 +80,86 @@ def test_prune_removes_done():
              {"id": "b", "done": True, "title": "B", "surface_on": None}]
     kept = c.prune(items)
     assert [i["id"] for i in kept] == ["a"]
+
+
+# ---- v0.1.3: slug cap, summary tier, edit/get, summary-aware banner ----
+
+def test_slugify_caps_length_and_trims_partial_word():
+    long = ("Run Adobe cutout re-test on corporate wifi with a very long descriptive "
+            "title that just keeps going well past any sane id length")
+    s = c.slugify(long)
+    assert len(s) <= 50
+    assert not s.startswith("-") and not s.endswith("-")
+
+
+def test_add_item_defaults_summary_to_empty_list():
+    items = []
+    it = c.add_item(items, "Do X", created="2026-07-14")
+    assert it["summary"] == []
+
+
+def test_add_item_stores_summary_list():
+    items = []
+    it = c.add_item(items, "Do X", summary=["point one", "point two"], created="2026-07-14")
+    assert it["summary"] == ["point one", "point two"]
+
+
+def test_get_item_returns_match_or_none():
+    items = [{"id": "k", "title": "K"}]
+    assert c.get_item(items, "k")["title"] == "K"
+    assert c.get_item(items, "nope") is None
+
+
+def test_edit_item_changes_only_passed_fields():
+    items = []
+    c.add_item(items, "Old title", detail="keep me", created="2026-07-14")
+    iid = items[0]["id"]
+    c.edit_item(items, iid, title="New title")
+    assert items[0]["title"] == "New title"
+    assert items[0]["detail"] == "keep me"   # untouched
+
+
+def test_edit_item_id_and_created_are_immutable():
+    items = []
+    c.add_item(items, "Title", created="2026-07-01")
+    iid = items[0]["id"]
+    c.edit_item(items, iid, title="Totally different words here")
+    assert items[0]["id"] == iid            # id stable despite retitle (the whole point)
+    assert items[0]["created"] == "2026-07-01"
+
+
+def test_edit_item_replaces_summary():
+    items = []
+    c.add_item(items, "T", summary=["a"], created="2026-07-14")
+    iid = items[0]["id"]
+    c.edit_item(items, iid, summary=["x", "y"])
+    assert items[0]["summary"] == ["x", "y"]
+
+
+def test_edit_item_surface_on_sentinel_vs_explicit():
+    items = []
+    c.add_item(items, "T", surface_on="2026-07-20", created="2026-07-14")
+    iid = items[0]["id"]
+    c.edit_item(items, iid, title="renamed")            # not passing surface_on
+    assert items[0]["surface_on"] == "2026-07-20"       # → left intact
+    c.edit_item(items, iid, surface_on=None)            # explicit clear
+    assert items[0]["surface_on"] is None
+    c.edit_item(items, iid, surface_on="2026-08-01")    # explicit set
+    assert items[0]["surface_on"] == "2026-08-01"
+
+
+def test_edit_item_returns_none_for_missing_id():
+    assert c.edit_item([], "nope", title="x") is None
+
+
+def test_format_banner_renders_summary_bullets():
+    b = c.format_banner([{"id": "x1", "title": "Headline", "summary": ["first pt", "second pt"],
+                          "surface_on": None, "created": "2026-07-14", "done": False}])
+    assert "Headline" in b
+    assert "first pt" in b and "second pt" in b
+
+
+def test_format_banner_without_summary_is_title_only():
+    b = c.format_banner([{"id": "x1", "title": "Headline", "surface_on": None,
+                          "created": "2026-07-14", "done": False}])
+    assert [l for l in b.splitlines() if l.strip().startswith("- ")] == []

@@ -76,3 +76,51 @@ def test_hook_survives_corrupt_store(tmp_path):
     store.write_text("{ this is not valid json ")
     r = _run([HOOK], store, "2026-07-12")
     assert r.returncode == 0 and r.stdout.strip() == ""  # fail-safe, no crash
+
+
+# ---- v0.1.3: add --point, edit, show ----
+
+def test_cli_add_with_points_and_banner_shows_them(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Do X", "--point", "first", "--point", "second"], store, "2026-07-14")
+    out = _run([HOOK], store, "2026-07-14").stdout
+    assert "first" in out and "second" in out
+
+
+def test_cli_edit_retitles_but_keeps_id(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Old name"], store, "2026-07-14")
+    edit = _run([CLI, "edit", "old-name", "--title", "New name"], store, "2026-07-14")
+    assert edit.returncode == 0
+    lst = _run([CLI, "list"], store, "2026-07-14").stdout
+    assert "[old-name] New name" in lst   # same id, new title (this is the whole point of edit)
+
+
+def test_cli_edit_sets_summary_points(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Task"], store, "2026-07-14")
+    _run([CLI, "edit", "task", "--point", "alpha", "--point", "beta"], store, "2026-07-14")
+    out = _run([HOOK], store, "2026-07-14").stdout
+    assert "alpha" in out and "beta" in out
+
+
+def test_cli_edit_missing_id_errors(tmp_path):
+    store = tmp_path / "s.json"
+    r = _run([CLI, "edit", "nope", "--title", "x"], store, "2026-07-14")
+    assert r.returncode == 1
+
+
+def test_cli_show_prints_title_summary_detail(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Task", "--detail", "the full context dump", "--point", "k1"], store, "2026-07-14")
+    r = _run([CLI, "show", "task"], store, "2026-07-14")
+    assert r.returncode == 0
+    assert "the full context dump" in r.stdout and "k1" in r.stdout and "Task" in r.stdout
+
+
+def test_cli_edit_clear_surface_on(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Later", "--surface-on", "2026-08-01"], store, "2026-07-14")
+    assert _run([HOOK], store, "2026-07-14").stdout.strip() == ""     # hidden before date
+    _run([CLI, "edit", "later", "--clear-surface-on"], store, "2026-07-14")
+    assert "Later" in _run([HOOK], store, "2026-07-14").stdout        # cleared → surfaces now
