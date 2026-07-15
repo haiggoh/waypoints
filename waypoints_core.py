@@ -96,6 +96,7 @@ def add_item(items, title, detail="", surface_on=None, created=None, id=None, su
         "surface_on": surface_on,
         "created": created or today(),
         "done": False,
+        "priority": 0,                                  # higher sorts earlier in the banner
     }
     items.append(item)
     return item
@@ -136,6 +137,47 @@ def mark_done(items, item_id):
     return False
 
 
+def reopen_item(items, item_id):
+    """Undo `done` on an item (the inverse of mark_done). Returns True if found."""
+    for i in items:
+        if i.get("id") == item_id:
+            i["done"] = False
+            return True
+    return False
+
+
+def toggle_done(items, item_id):
+    """Flip an item's done state. Returns the new state, or None if no such id."""
+    for i in items:
+        if i.get("id") == item_id:
+            i["done"] = not i.get("done", False)
+            return i["done"]
+    return None
+
+
+def set_priority(items, item_id, priority):
+    """Set an item's priority (int; higher sorts earlier in the banner). Returns the item, or
+    None if no such id."""
+    it = get_item(items, item_id)
+    if it is None:
+        return None
+    it["priority"] = priority
+    return it
+
+
+def reorder_item(items, item_id, position):
+    """Move an item to a specific 0-based position within `items` (clamped to bounds). This
+    changes list order directly rather than `priority` — for the rare case of wanting explicit
+    manual ordering instead of a priority tier. Returns True if found."""
+    for idx, i in enumerate(items):
+        if i.get("id") == item_id:
+            it = items.pop(idx)
+            position = max(0, min(position, len(items)))
+            items.insert(position, it)
+            return True
+    return False
+
+
 def prune(items):
     """Return items with done ones removed."""
     return [i for i in items if not i.get("done")]
@@ -143,7 +185,8 @@ def prune(items):
 
 def surfaceable(items, today_str):
     """Items to show now: not done, and (undated OR surface_on <= today). ISO dates sort
-    lexically, so a string <= comparison is correct."""
+    lexically, so a string <= comparison is correct. Sorted by priority descending (stable, so
+    equal-priority items keep their list/insertion order)."""
     out = []
     for i in items:
         if i.get("done"):
@@ -152,6 +195,7 @@ def surfaceable(items, today_str):
         if so and so > today_str:
             continue
         out.append(i)
+    out.sort(key=lambda i: -i.get("priority", 0))
     return out
 
 

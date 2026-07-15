@@ -1,6 +1,6 @@
 ---
 name: waypoints
-description: Use to manage the user's persistent open-items reminder ("waypoints") — the SessionStart banner that lists unfinished tasks/follow-ups and stays until each is marked done. Invoke when adding a follow-up you want surfaced next session, marking one done, listing what's open, or reconciling the store during a session wrap-up. Also read this when you see the "waypoints:" startup banner and want to know how to act on or clear its items.
+description: Use to manage the user's persistent open-items reminder ("waypoints") — the SessionStart banner that lists unfinished tasks/follow-ups and stays until each is marked done. Invoke when adding a follow-up you want surfaced next session, marking one done, listing what's open, or reconciling the store during a session wrap-up. Also invoke on generic open-item language even when the user doesn't say "waypoint" — "add this to my to-do list", "track this as a loose end", "remind me about X next time", "don't let me forget this", "keep this on my radar". Also read this when you see the "waypoints:" startup banner and want to know how to act on or clear its items.
 ---
 
 # waypoints — persistent open-items reminder
@@ -40,12 +40,20 @@ waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on Y
 waypoints.py edit <id> [--title "…"] [--point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on]
 waypoints.py show <id>                  # print title + summary + full detail (the "pick it up" view)
 waypoints.py done <id>                  # marking done removes it from the banner
+waypoints.py reopen <id>                # undo done (inverse of `done`)
+waypoints.py toggle <id>                # flip an item's done state in one call
+waypoints.py priority <id> <level>      # int; higher sorts earlier in the banner (default 0)
+waypoints.py reorder <id> <position>    # move to an explicit 0-based position in the list
 waypoints.py prune                      # drop done items
 ```
 Prefer **`edit`** to fix or enrich an existing item — it keeps the `id` and `created`. Never
 `done`+re-`add` to "update" (that regenerates the id, drops `created`, and leaves a false ✓). When
 picking an item back up, `show <id>` to read its full `detail` (the banner only carries title +
-summary bullets).
+summary bullets). If the user says "actually that's not done" (marked done in error, or the fix
+didn't hold), use `reopen` rather than re-`add`ing — same reason as `edit`: keeps the id.
+`toggle` is a one-call convenience when you don't know or care which state it's currently in.
+Use `priority` when an item should consistently jump the queue (urgent/blocking); use `reorder`
+only for a one-off manual ordering that doesn't fit the priority model.
 The bare command is **`waypoints.py`** — that's the shipped filename; note the `.py` (bare
 `waypoints` will not resolve). If it isn't on PATH (older Claude Code), fall back to
 `python3 "$CLAUDE_PLUGIN_ROOT/bin/waypoints.py"` while a skill/hook is running, or edit

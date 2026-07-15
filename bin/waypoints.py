@@ -7,6 +7,10 @@
                         [--surface-on YYYY-MM-DD] [--clear-surface-on]
     waypoints show <id>                  # print title + summary + full detail (the "pick it up" view)
     waypoints done <id>                  # mark an item done (removes it from the banner)
+    waypoints reopen <id>                # undo done (inverse of `done`)
+    waypoints toggle <id>                # flip an item's done state
+    waypoints priority <id> <level>      # set banner priority (int; higher shows earlier)
+    waypoints reorder <id> <position>    # move an item to a 0-based position in the list
     waypoints prune                      # drop all done items
 
 Tiers: `title` (banner headline) + `summary` (short bullets, shown in banner via --point) +
@@ -49,6 +53,21 @@ def main(argv=None):
 
     pd = sub.add_parser("done", help="mark an item done by id")
     pd.add_argument("id")
+
+    pr = sub.add_parser("reopen", help="undo done on an item by id (inverse of `done`)")
+    pr.add_argument("id")
+
+    pt = sub.add_parser("toggle", help="flip an item's done state")
+    pt.add_argument("id")
+
+    pp = sub.add_parser("priority", help="set an item's banner priority (higher sorts earlier)")
+    pp.add_argument("id")
+    pp.add_argument("level", type=int, help="integer priority; higher = shown earlier. 0 is default")
+
+    pro = sub.add_parser("reorder", help="move an item to a specific 0-based position in the list")
+    pro.add_argument("id")
+    pro.add_argument("position", type=int)
+
     sub.add_parser("prune", help="remove done items")
     args = p.parse_args(argv)
 
@@ -64,7 +83,8 @@ def main(argv=None):
         for i in items:
             flag = "✓" if i.get("done") else ("▶" if i["id"] in surf else "·")
             so = f" surface_on={i['surface_on']}" if i.get("surface_on") else ""
-            print(f"  {flag} [{i['id']}] {i['title']}{so}")
+            pr = f" priority={i['priority']}" if i.get("priority") else ""
+            print(f"  {flag} [{i['id']}] {i['title']}{so}{pr}")
         return 0
 
     if args.cmd == "add":
@@ -116,6 +136,36 @@ def main(argv=None):
         ok = c.mark_done(items, args.id)
         c.save_store(store)
         print(f"marked done: {args.id}" if ok else f"no such id: {args.id}")
+        return 0 if ok else 1
+
+    if args.cmd == "reopen":
+        ok = c.reopen_item(items, args.id)
+        c.save_store(store)
+        print(f"reopened: {args.id}" if ok else f"no such id: {args.id}")
+        return 0 if ok else 1
+
+    if args.cmd == "toggle":
+        new_state = c.toggle_done(items, args.id)
+        if new_state is None:
+            print(f"no such id: {args.id}")
+            return 1
+        c.save_store(store)
+        print(f"{args.id} is now {'done' if new_state else 'open'}")
+        return 0
+
+    if args.cmd == "priority":
+        it = c.set_priority(items, args.id, args.level)
+        if it is None:
+            print(f"no such id: {args.id}")
+            return 1
+        c.save_store(store)
+        print(f"priority [{it['id']}] = {it['priority']}")
+        return 0
+
+    if args.cmd == "reorder":
+        ok = c.reorder_item(items, args.id, args.position)
+        c.save_store(store)
+        print(f"reordered: {args.id}" if ok else f"no such id: {args.id}")
         return 0 if ok else 1
 
     if args.cmd == "prune":

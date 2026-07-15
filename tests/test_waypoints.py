@@ -163,3 +163,81 @@ def test_format_banner_without_summary_is_title_only():
     b = c.format_banner([{"id": "x1", "title": "Headline", "surface_on": None,
                           "created": "2026-07-14", "done": False}])
     assert [l for l in b.splitlines() if l.strip().startswith("- ")] == []
+
+
+# ---- reopen / toggle / priority / reorder ----
+
+def test_reopen_item_clears_done():
+    items = [{"id": "a", "title": "A", "done": True}]
+    assert c.reopen_item(items, "a") is True
+    assert items[0]["done"] is False
+
+
+def test_reopen_item_missing_id_returns_false():
+    assert c.reopen_item([], "nope") is False
+
+
+def test_toggle_done_flips_state_both_ways():
+    items = [{"id": "a", "title": "A", "done": False}]
+    assert c.toggle_done(items, "a") is True
+    assert items[0]["done"] is True
+    assert c.toggle_done(items, "a") is False
+    assert items[0]["done"] is False
+
+
+def test_toggle_done_missing_id_returns_none():
+    assert c.toggle_done([], "nope") is None
+
+
+def test_add_item_defaults_priority_to_zero():
+    items = []
+    it = c.add_item(items, "Do X", created="2026-07-14")
+    assert it["priority"] == 0
+
+
+def test_set_priority_updates_item():
+    items = []
+    c.add_item(items, "Title", created="2026-07-14")
+    iid = items[0]["id"]
+    it = c.set_priority(items, iid, 5)
+    assert it["priority"] == 5
+    assert items[0]["priority"] == 5
+
+
+def test_set_priority_missing_id_returns_none():
+    assert c.set_priority([], "nope", 5) is None
+
+
+def test_surfaceable_sorts_by_priority_descending():
+    items = [
+        {"id": "a", "title": "A", "surface_on": None, "done": False, "priority": 0},
+        {"id": "b", "title": "B", "surface_on": None, "done": False, "priority": 5},
+        {"id": "c", "title": "C", "surface_on": None, "done": False, "priority": 1},
+    ]
+    out = [i["id"] for i in c.surfaceable(items, "2026-07-14")]
+    assert out == ["b", "c", "a"]
+
+
+def test_surfaceable_stable_order_for_equal_priority():
+    items = [
+        {"id": "a", "title": "A", "surface_on": None, "done": False, "priority": 0},
+        {"id": "b", "title": "B", "surface_on": None, "done": False, "priority": 0},
+    ]
+    out = [i["id"] for i in c.surfaceable(items, "2026-07-14")]
+    assert out == ["a", "b"]
+
+
+def test_reorder_item_moves_to_position():
+    items = [{"id": "a", "title": "A"}, {"id": "b", "title": "B"}, {"id": "c", "title": "C"}]
+    assert c.reorder_item(items, "c", 0) is True
+    assert [i["id"] for i in items] == ["c", "a", "b"]
+
+
+def test_reorder_item_clamps_out_of_range_position():
+    items = [{"id": "a", "title": "A"}, {"id": "b", "title": "B"}]
+    assert c.reorder_item(items, "a", 99) is True
+    assert [i["id"] for i in items] == ["b", "a"]
+
+
+def test_reorder_item_missing_id_returns_false():
+    assert c.reorder_item([], "nope", 0) is False

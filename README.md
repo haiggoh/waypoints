@@ -32,6 +32,10 @@ waypoints.py add "Publish the PR" --point "branch fix/x" --point "re-verify firs
 waypoints.py edit adobe-publish --title "Publish the PR (rebased)" --point "branch fix/x2"
 waypoints.py show adobe-publish     # title + summary + full detail — the "pick it up" view
 waypoints.py done adobe-publish
+waypoints.py reopen adobe-publish   # undo a mistaken done
+waypoints.py toggle adobe-publish   # flip done state in one call
+waypoints.py priority adobe-publish 5   # bump it ahead of others in the banner
+waypoints.py reorder adobe-publish 0    # or move it to an explicit position
 waypoints.py prune
 ```
 

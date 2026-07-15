@@ -124,3 +124,64 @@ def test_cli_edit_clear_surface_on(tmp_path):
     assert _run([HOOK], store, "2026-07-14").stdout.strip() == ""     # hidden before date
     _run([CLI, "edit", "later", "--clear-surface-on"], store, "2026-07-14")
     assert "Later" in _run([HOOK], store, "2026-07-14").stdout        # cleared → surfaces now
+
+
+# ---- v0.1.4: reopen, toggle, priority, reorder ----
+
+def test_cli_reopen_undoes_done(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Task"], store, "2026-07-15")
+    _run([CLI, "done", "task"], store, "2026-07-15")
+    assert _run([HOOK], store, "2026-07-15").stdout.strip() == ""      # gone once done
+    r = _run([CLI, "reopen", "task"], store, "2026-07-15")
+    assert r.returncode == 0 and "reopened" in r.stdout
+    assert "Task" in _run([HOOK], store, "2026-07-15").stdout          # back once reopened
+
+
+def test_cli_reopen_missing_id_errors(tmp_path):
+    store = tmp_path / "s.json"
+    r = _run([CLI, "reopen", "nope"], store, "2026-07-15")
+    assert r.returncode == 1
+
+
+def test_cli_toggle_flips_done_state(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Task"], store, "2026-07-15")
+    r1 = _run([CLI, "toggle", "task"], store, "2026-07-15")
+    assert "now done" in r1.stdout
+    assert _run([HOOK], store, "2026-07-15").stdout.strip() == ""
+    r2 = _run([CLI, "toggle", "task"], store, "2026-07-15")
+    assert "now open" in r2.stdout
+    assert "Task" in _run([HOOK], store, "2026-07-15").stdout
+
+
+def test_cli_priority_changes_banner_order(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "First added"], store, "2026-07-15")
+    _run([CLI, "add", "Second added"], store, "2026-07-15")
+    _run([CLI, "priority", "second-added", "5"], store, "2026-07-15")
+    out = _run([HOOK], store, "2026-07-15").stdout
+    assert out.index("Second added") < out.index("First added")       # bumped ahead
+
+
+def test_cli_priority_missing_id_errors(tmp_path):
+    store = tmp_path / "s.json"
+    r = _run([CLI, "priority", "nope", "3"], store, "2026-07-15")
+    assert r.returncode == 1
+
+
+def test_cli_reorder_moves_item_in_list(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "A"], store, "2026-07-15")
+    _run([CLI, "add", "B"], store, "2026-07-15")
+    _run([CLI, "add", "C"], store, "2026-07-15")
+    r = _run([CLI, "reorder", "c", "0"], store, "2026-07-15")
+    assert r.returncode == 0
+    lst = _run([CLI, "list"], store, "2026-07-15").stdout
+    assert lst.index("[c]") < lst.index("[a]") < lst.index("[b]")
+
+
+def test_cli_reorder_missing_id_errors(tmp_path):
+    store = tmp_path / "s.json"
+    r = _run([CLI, "reorder", "nope", "0"], store, "2026-07-15")
+    assert r.returncode == 1

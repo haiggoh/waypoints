@@ -1,9 +1,9 @@
 {
   "name": "waypoints",
-  "version": "0.1.3",
-  "description": "Surfaces your open tasks / to-dos / waypoints as a persistent SessionStart banner that stays until each item is marked done — unlike resume-interrupted, it does NOT self-denoise. Reads an explicit store you maintain (optionally with 'surface-on' dates). Optional: disable via /plugin.",
+  "version": "0.1.4",
+  "description": "Surfaces your open tasks / to-dos / waypoints as a persistent SessionStart banner that stays until each item is marked done — unlike resume-interrupted, it does NOT self-denoise. Reads an explicit store you maintain (optionally with 'surface-on' dates and priority). Optional: disable via /plugin.",
   "author": { "name": "Heiko Brantsch" },
   "homepage": "https://github.com/haiggoh/waypoints",
   "license": "MIT",
-  "keywords": ["skill", "hook", "sessions", "reminders", "todo", "waypoints", "continuity"]
+  "keywords": ["skill", "hook", "sessions", "reminders", "todo", "waypoints", "continuity", "loose-ends", "follow-up"]
 }
