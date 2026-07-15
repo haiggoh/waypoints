@@ -199,17 +199,27 @@ def surfaceable(items, today_str):
     return out
 
 
+COMPACT_THRESHOLD = 3
+
+
 def format_banner(items):
-    """Banner text for the given (already-surfaceable) items, or '' if none."""
+    """Banner text for the given (already-surfaceable) items, or '' if none.
+
+    Past COMPACT_THRESHOLD open items, sub-bullets are dropped (title+id only) to keep the
+    banner skimmable; full detail stays one `waypoints.py show <id>` away."""
     if not items:
         return ""
+    compact = len(items) > COMPACT_THRESHOLD
     lines = [
         f"🧭 waypoints: {len(items)} open waypoint(s) still ahead — they persist until done. "
         f"Just ask me to add or complete one; disable via /plugin if unwanted:"
     ]
+    if compact:
+        lines.append("  (compact mode — run `waypoints.py show <id>` for an item's sub-bullets)")
     for i in items:
         since = f"  (since {i['created']})" if i.get("created") else ""
         lines.append(f"  • {i['title']}{since}  [{i['id']}]")
-        for point in i.get("summary") or []:
-            lines.append(f"      - {point}")
+        if not compact:
+            for point in i.get("summary") or []:
+                lines.append(f"      - {point}")
     return "\n".join(lines)

@@ -165,6 +165,23 @@ def test_format_banner_without_summary_is_title_only():
     assert [l for l in b.splitlines() if l.strip().startswith("- ")] == []
 
 
+def test_format_banner_compact_mode_past_threshold_drops_bullets():
+    items = [{"id": f"x{n}", "title": f"Item {n}", "summary": ["detail point"],
+              "surface_on": None, "done": False} for n in range(c.COMPACT_THRESHOLD + 1)]
+    b = c.format_banner(items)
+    assert "detail point" not in b
+    assert all(f"Item {n}" in b for n in range(c.COMPACT_THRESHOLD + 1))
+    assert "waypoints.py show" in b
+
+
+def test_format_banner_at_threshold_still_shows_bullets():
+    items = [{"id": f"x{n}", "title": f"Item {n}", "summary": ["detail point"],
+              "surface_on": None, "done": False} for n in range(c.COMPACT_THRESHOLD)]
+    b = c.format_banner(items)
+    assert "detail point" in b
+    assert "waypoints.py show" not in b
+
+
 # ---- reopen / toggle / priority / reorder ----
 
 def test_reopen_item_clears_done():
