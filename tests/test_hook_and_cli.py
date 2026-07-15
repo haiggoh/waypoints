@@ -12,8 +12,12 @@ def _env(store, today=None):
     return e
 
 
-def _run(argv, store, today=None):
-    return subprocess.run([sys.executable] + argv, capture_output=True, text=True, env=_env(store, today))
+def _run(argv, store, today=None, stdin="", env_extra=None):
+    env = _env(store, today)
+    if env_extra:
+        env.update(env_extra)
+    return subprocess.run([sys.executable] + argv, input=stdin, capture_output=True,
+                           text=True, env=env)
 
 
 def test_hook_empty_store_emits_nothing(tmp_path):
@@ -185,3 +189,55 @@ def test_cli_reorder_missing_id_errors(tmp_path):
     store = tmp_path / "s.json"
     r = _run([CLI, "reorder", "nope", "0"], store, "2026-07-15")
     assert r.returncode == 1
+
+
+def _settings(tmp_path, enabled):
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"enabledPlugins": enabled}))
+    return str(p)
+
+
+def test_hook_skips_wait_when_resume_interrupted_not_installed(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Publish the PR"], store, "2026-07-12")
+    settings = _settings(tmp_path, {"waypoints@haiggoh": True})
+    r = _run([HOOK], store, "2026-07-12", stdin=json.dumps({"session_id": "s1"}),
+              env_extra={"CLAUDE_SETTINGS_FILE": settings, "TMPDIR": str(tmp_path)})
+    assert r.returncode == 0
+    assert "Publish the PR" in r.stdout
+
+
+def test_hook_waits_then_prints_when_flag_never_appears(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Publish the PR"], store, "2026-07-12")
+    settings = _settings(tmp_path, {"resume-interrupted@haiggoh": True, "waypoints@haiggoh": True})
+    r = _run([HOOK], store, "2026-07-12", stdin=json.dumps({"session_id": "s2"}),
+              env_extra={"CLAUDE_SETTINGS_FILE": settings, "TMPDIR": str(tmp_path),
+                         "WAYPOINTS_BANNER_WAIT_S": "0.2", "WAYPOINTS_BANNER_POLL_S": "0.05"})
+    assert r.returncode == 0
+    assert "Publish the PR" in r.stdout  # falls through and prints anyway, never suppressed
+
+
+def test_hook_resolves_fast_when_flag_already_present(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Publish the PR"], store, "2026-07-12")
+    settings = _settings(tmp_path, {"resume-interrupted@haiggoh": True, "waypoints@haiggoh": True})
+    flag_dir = tmp_path / "claude-sessionstart-banners"
+    flag_dir.mkdir()
+    (flag_dir / "s3.resume-interrupted.done").write_text("producer=resume-interrupted printed=0\n")
+    r = _run([HOOK], store, "2026-07-12", stdin=json.dumps({"session_id": "s3"}),
+              env_extra={"CLAUDE_SETTINGS_FILE": settings, "TMPDIR": str(tmp_path),
+                         "WAYPOINTS_BANNER_WAIT_S": "5", "WAYPOINTS_BANNER_POLL_S": "0.05"})
+    assert r.returncode == 0
+    assert "Publish the PR" in r.stdout
+
+
+def test_hook_malformed_settings_file_disables_wait(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Publish the PR"], store, "2026-07-12")
+    settings = tmp_path / "settings.json"
+    settings.write_text("not json")
+    r = _run([HOOK], store, "2026-07-12", stdin=json.dumps({"session_id": "s4"}),
+              env_extra={"CLAUDE_SETTINGS_FILE": str(settings), "TMPDIR": str(tmp_path)})
+    assert r.returncode == 0
+    assert "Publish the PR" in r.stdout

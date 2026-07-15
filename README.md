@@ -75,9 +75,14 @@ undo; your store file stays.
 
 ## Relationship to resume-interrupted
 
-Distinct, non-interfering mechanism: separate plugin, separate store, separate banner label. Both
-SessionStart hooks run independently. resume-interrupted answers "was my last session cut off?";
-waypoints answers "what did I leave open that isn't done yet?".
+Distinct mechanism: separate plugin, separate store, separate banner label. resume-interrupted
+answers "was my last session cut off?"; waypoints answers "what did I leave open that isn't done
+yet?". No code-level dependency either way — but since resume-interrupted's banner is meant to
+read as more urgent, waypoints optionally sequences after it: if resume-interrupted is installed
+and enabled (detected via `~/.claude/settings.json`, not an import), waypoints briefly polls a
+session-scoped flag resume-interrupted writes unconditionally on exit, capped at ~0.75s, and
+always prints its own banner regardless of whether that flag showed up in time. If
+resume-interrupted isn't installed, this adds zero latency and never runs at all.
 
 ## Tests
 
