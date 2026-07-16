@@ -248,10 +248,15 @@ def format_banner(items):
     if compact:
         lines.append(_wrap("(compact mode — run `waypoints.py show <id>` for an item's "
                             "sub-bullets)", "  "))
+    bullet_indent = "  • "
+    date_indent = " " * len(bullet_indent)
     for i in items:
-        # NBSP before the date keeps "(since DATE)" from splitting across the wrap.
-        since = f"  (since {i['created']})" if i.get("created") else ""
-        lines.append(_wrap(f"{i['title']}{since}", "  • "))
+        lines.append(_wrap(i["title"], bullet_indent))
+        # The date always gets its own line, hanging-indented under the title, so its
+        # placement/indentation is fixed regardless of title length or pane width --
+        # unlike appending it to the title line, this needs no wrap heuristics.
+        if i.get("created"):
+            lines.append(_wrap(f"(since {i['created']})", date_indent))
         if not compact:
             for point in i.get("summary") or []:
                 lines.append(_wrap(point, "      - "))

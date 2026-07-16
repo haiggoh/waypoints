@@ -207,10 +207,9 @@ def test_format_banner_wrapped_summary_point_hangs_indent_under_text():
     assert not lines[idx + 1].startswith("        - ")
 
 
-def test_format_banner_since_annotation_never_splits_from_its_date():
-    # Regression: a title long enough that "since" fits on the wrapped line but the date
-    # doesn't used to orphan the date alone on the next line. The "(since DATE)" annotation
-    # must move as one unit.
+def test_format_banner_date_is_always_its_own_line():
+    # v0.1.10: the date never shares a line with the title (regardless of title length) —
+    # it always gets its own hanging-indented line, so its indentation is predictable.
     long_title = ("Tackle two JoyIA Chat-drafted plans once budget resets: "
                   "credit-efficient-setup-v2.md")
     items = [{"id": "x1", "title": long_title, "surface_on": None, "created": "2026-07-16",
@@ -218,7 +217,9 @@ def test_format_banner_since_annotation_never_splits_from_its_date():
     lines = c.format_banner(items).splitlines()
     since_lines = [l for l in lines if "since" in l or "2026-07-16" in l]
     assert len(since_lines) == 1
-    assert "(since" + chr(0xa0) + "2026-07-16)" in since_lines[0]
+    assert since_lines[0] == "    (since 2026-07-16)"
+    title_lines = [l for l in lines if "Tackle" in l]
+    assert not any("since" in l for l in title_lines)  # date never on the title's own line(s)
 
 
 # ---- v0.1.9: conservative width prevents double-wrap by Claude Code's renderer ----
@@ -257,14 +258,14 @@ def test_compact_mode_lines_also_within_width():
 
 
 def test_since_annotation_stays_atomic_at_new_width():
-    # Regression guard carried over to the 72-col width: "(since DATE)" must not split its date.
+    # The date line is its own line at the 72-col width regardless of title length.
     long_title = "Tackle a plan once budget resets: some-fairly-long-artifact-name-v2.md here"
     items = [{"id": "x1", "title": long_title, "surface_on": None, "created": "2026-07-16",
               "done": False}]
     lines = c.format_banner(items).splitlines()
     since_lines = [l for l in lines if "since" in l or "2026-07-16" in l]
     assert len(since_lines) == 1
-    assert "(since" + chr(0xa0) + "2026-07-16)" in since_lines[0]
+    assert since_lines[0] == "    (since 2026-07-16)"
 
 
 # ---- reopen / toggle / priority / reorder ----

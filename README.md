@@ -12,11 +12,16 @@ done** and **past any `surface_on` date**, and prints a banner:
 
 ```
 🧭 waypoints: 2 open waypoint(s) still ahead — they persist until done. Just ask me to add or complete one; disable via /plugin if unwanted:
-  • Publish the Adobe upstream PRs  (since 2026-07-12)  [adobe-publish]
+  • Publish the Adobe upstream PRs
+    (since 2026-07-12)
       - branch fix/place-image; re-verify live first
       - decide: one PR or two
-  • Re-test cutouts on corporate wifi  (since 2026-07-12)  [corporate-wifi-retest]
+  • Re-test cutouts on corporate wifi
+    (since 2026-07-12)
 ```
+
+The `(since DATE)` annotation always gets its own line, hanging-indented under the title —
+regardless of title length or terminal width — so indentation stays consistent everywhere.
 
 If there are no surfaceable items, it prints nothing (no empty banner).
 
