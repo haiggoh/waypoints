@@ -207,6 +207,20 @@ def test_format_banner_wrapped_summary_point_hangs_indent_under_text():
     assert not lines[idx + 1].startswith("        - ")
 
 
+def test_format_banner_since_annotation_never_splits_from_its_date():
+    # Regression: a title long enough that "since" fits on the wrapped line but the date
+    # doesn't used to orphan the date alone on the next line. The "(since DATE)" annotation
+    # must move as one unit.
+    long_title = ("Tackle two JoyIA Chat-drafted plans once budget resets: "
+                  "credit-efficient-setup-v2.md")
+    items = [{"id": "x1", "title": long_title, "surface_on": None, "created": "2026-07-16",
+              "done": False}]
+    lines = c.format_banner(items).splitlines()
+    since_lines = [l for l in lines if "since" in l or "2026-07-16" in l]
+    assert len(since_lines) == 1
+    assert "(since" + chr(0xa0) + "2026-07-16)" in since_lines[0]
+
+
 # ---- reopen / toggle / priority / reorder ----
 
 def test_reopen_item_clears_done():
