@@ -202,16 +202,32 @@ def surfaceable(items, today_str):
 
 COMPACT_THRESHOLD = 3
 
-# Wrap width for banner lines. Overridable ($WAYPOINTS_BANNER_WIDTH) for tests; the hook runs
-# non-interactively so terminal width usually isn't available — a fixed default keeps wrapping
-# deterministic rather than guessing at a live column count.
-BANNER_WIDTH = int(os.environ.get("WAYPOINTS_BANNER_WIDTH") or 100)
+# Wrap width for banner lines. Overridable ($WAYPOINTS_BANNER_WIDTH) for tests.
+#
+# Why 72 (not the terminal's real width, and not the old 100): the hook's output is NOT printed
+# straight to the invoking tty. It's emitted as a JSON `systemMessage`/`additionalContext` string
+# that Claude Code relays through its OWN message renderer, which reflows text at the user's LIVE
+# pane width. So we wrap TWICE: once here (adding the hanging indent), then again by Claude Code's
+# renderer if any line we emit is wider than the pane. That second wrap knows nothing about our
+# indent spaces — it just breaks the raw stream at the pane edge, landing mid-indent/mid-word.
+# That double-wrap is what made continuation lines ragged "only at some window widths."
+#
+# The real render width is UNKNOWABLE at hook-run time (shutil.get_terminal_size()/$COLUMNS
+# reflect the hook subprocess's own stdio, not the chat pane), so we can't measure it. Instead we
+# pick a width comfortably under the common 80-column terminal minimum: at 72 our pre-wrapped
+# lines fit inside an 80-col pane with ~8 cols of slack, so the renderer never re-wraps them and
+# the double-wrap simply stops happening in practice. The slack also absorbs the one wide glyph
+# in the banner (🧭 is East-Asian-Wide = 2 display cols but textwrap counts it as 1); it sits only
+# in the header, never inside a wrapped/indented continuation segment, so a 1-col miscount there
+# is harmless within the slack.
+BANNER_WIDTH = int(os.environ.get("WAYPOINTS_BANNER_WIDTH") or 72)
 
 
 def _wrap(text, indent):
     """Wrap `text` at BANNER_WIDTH with continuation lines hanging-indented to align under the
-    first line's text (not its bullet marker) — plain terminal auto-wrap doesn't know about our
-    indent, so we do it ourselves rather than relying on the terminal."""
+    first line's text (not its bullet marker). We wrap ourselves — Claude Code's message renderer
+    (which shows this banner) has no knowledge of our indent, and keeping every emitted line under
+    a conservative width stops that renderer from re-wrapping (and thus mangling) our lines."""
     return textwrap.fill(text, width=BANNER_WIDTH, initial_indent=indent,
                           subsequent_indent=" " * len(indent))
 

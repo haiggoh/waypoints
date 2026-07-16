@@ -221,6 +221,52 @@ def test_format_banner_since_annotation_never_splits_from_its_date():
     assert "(since" + chr(0xa0) + "2026-07-16)" in since_lines[0]
 
 
+# ---- v0.1.9: conservative width prevents double-wrap by Claude Code's renderer ----
+
+def test_banner_width_is_conservative_under_80_cols():
+    # The banner is relayed through Claude Code's own message renderer, which re-wraps at the
+    # user's live pane width. Keeping our width comfortably under the common 80-col minimum stops
+    # that second wrap from mangling our hanging indents.
+    assert c.BANNER_WIDTH <= 76
+
+
+def test_no_emitted_line_exceeds_banner_width():
+    # Every wrapped line we emit must fit within BANNER_WIDTH so a real (>=80-col) terminal pane
+    # never re-wraps it. Uses long text in every tier: header, title, since-date, summary points.
+    items = [
+        {"id": "x1",
+         "title": "A very long descriptive waypoint title that will certainly need wrapping " * 2,
+         "summary": ["a long summary bullet point that also must wrap across several lines " * 2],
+         "surface_on": None, "created": "2026-07-16", "done": False},
+        {"id": "x2", "title": "second", "surface_on": None, "created": "2026-07-16",
+         "done": False},
+    ]
+    for line in c.format_banner(items).splitlines():
+        assert len(line) <= c.BANNER_WIDTH, repr(line)
+
+
+def test_compact_mode_lines_also_within_width():
+    # Compact mode (>3 items) emits its own notice line + title-only bullets; those must fit too.
+    items = [{"id": f"i{n}",
+              "title": "long compact-mode waypoint title that needs to wrap somewhere " * 2,
+              "surface_on": None, "created": "2026-07-16", "done": False} for n in range(5)]
+    b = c.format_banner(items)
+    assert "compact mode" in b
+    for line in b.splitlines():
+        assert len(line) <= c.BANNER_WIDTH, repr(line)
+
+
+def test_since_annotation_stays_atomic_at_new_width():
+    # Regression guard carried over to the 72-col width: "(since DATE)" must not split its date.
+    long_title = "Tackle a plan once budget resets: some-fairly-long-artifact-name-v2.md here"
+    items = [{"id": "x1", "title": long_title, "surface_on": None, "created": "2026-07-16",
+              "done": False}]
+    lines = c.format_banner(items).splitlines()
+    since_lines = [l for l in lines if "since" in l or "2026-07-16" in l]
+    assert len(since_lines) == 1
+    assert "(since" + chr(0xa0) + "2026-07-16)" in since_lines[0]
+
+
 # ---- reopen / toggle / priority / reorder ----
 
 def test_reopen_item_clears_done():
