@@ -233,7 +233,8 @@ def format_banner(items):
         lines.append(_wrap("(compact mode — run `waypoints.py show <id>` for an item's "
                             "sub-bullets)", "  "))
     for i in items:
-        since = f"  (since {i['created']})" if i.get("created") else ""
+        # NBSP before the date keeps "(since DATE)" from splitting across the wrap.
+        since = f"  (since {i['created']})" if i.get("created") else ""
         lines.append(_wrap(f"{i['title']}{since}", "  • "))
         if not compact:
             for point in i.get("summary") or []:
