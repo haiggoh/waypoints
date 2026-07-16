@@ -44,11 +44,11 @@ def test_format_banner_empty_is_empty_string():
     assert c.format_banner([]) == ""
 
 
-def test_format_banner_lists_titles_and_ids():
+def test_format_banner_lists_titles_not_ids():
     b = c.format_banner([{"id": "x1", "title": "Do the thing", "surface_on": None, "done": False}])
     assert "waypoint" in b.lower()
     assert "Do the thing" in b
-    assert "x1" in b
+    assert "x1" not in b  # ids are a redundant restatement right next to the title; not printed
 
 
 # ---- add / done / prune / slug ----
@@ -88,7 +88,7 @@ def test_slugify_caps_length_and_trims_partial_word():
     long = ("Run Adobe cutout re-test on corporate wifi with a very long descriptive "
             "title that just keeps going well past any sane id length")
     s = c.slugify(long)
-    assert len(s) <= 50
+    assert len(s) <= 30
     assert not s.startswith("-") and not s.endswith("-")
 
 
@@ -180,6 +180,31 @@ def test_format_banner_at_threshold_still_shows_bullets():
     b = c.format_banner(items)
     assert "detail point" in b
     assert "waypoints.py show" not in b
+
+
+# ---- line-wrap hanging indent ----
+
+def test_format_banner_wrapped_bullet_hangs_indent_under_text():
+    long_title = "A " + ("very long descriptive title word " * 6)
+    items = [{"id": "x1", "title": long_title, "surface_on": None, "created": None,
+              "done": False}]
+    b = c.format_banner(items)
+    bullet_block = [l for l in b.splitlines() if l.startswith("  • ") or l.startswith("    ")]
+    assert len(bullet_block) > 1  # actually wrapped across multiple lines
+    assert bullet_block[0].startswith("  • ")
+    for cont in bullet_block[1:]:
+        assert cont.startswith("    ") and not cont.startswith("    • ")
+
+
+def test_format_banner_wrapped_summary_point_hangs_indent_under_text():
+    long_point = "a very long summary bullet point word " * 6
+    items = [{"id": "x1", "title": "T", "summary": [long_point], "surface_on": None,
+              "created": None, "done": False}]
+    lines = c.format_banner(items).splitlines()
+    idx = next(i for i, l in enumerate(lines) if l.strip().startswith("- "))
+    assert lines[idx].startswith("      - ")
+    assert lines[idx + 1].startswith("        ")  # continuation hangs under the point's text
+    assert not lines[idx + 1].startswith("        - ")
 
 
 # ---- reopen / toggle / priority / reorder ----

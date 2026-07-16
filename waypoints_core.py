@@ -15,6 +15,7 @@ import json
 import os
 import re
 import tempfile
+import textwrap
 from datetime import date
 
 VERSION = 1
@@ -65,7 +66,7 @@ def save_store(store, path=None):
             os.remove(tmp)
 
 
-def slugify(title, maxlen=50):
+def slugify(title, maxlen=30):
     """Kebab id from a title, capped at maxlen. Capping matters because a bloated title (the
     thing an `edit` command now prevents) would otherwise yield a monstrous, unusable id."""
     s = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
@@ -201,25 +202,40 @@ def surfaceable(items, today_str):
 
 COMPACT_THRESHOLD = 3
 
+# Wrap width for banner lines. Overridable ($WAYPOINTS_BANNER_WIDTH) for tests; the hook runs
+# non-interactively so terminal width usually isn't available — a fixed default keeps wrapping
+# deterministic rather than guessing at a live column count.
+BANNER_WIDTH = int(os.environ.get("WAYPOINTS_BANNER_WIDTH") or 100)
+
+
+def _wrap(text, indent):
+    """Wrap `text` at BANNER_WIDTH with continuation lines hanging-indented to align under the
+    first line's text (not its bullet marker) — plain terminal auto-wrap doesn't know about our
+    indent, so we do it ourselves rather than relying on the terminal."""
+    return textwrap.fill(text, width=BANNER_WIDTH, initial_indent=indent,
+                          subsequent_indent=" " * len(indent))
+
 
 def format_banner(items):
     """Banner text for the given (already-surfaceable) items, or '' if none.
 
-    Past COMPACT_THRESHOLD open items, sub-bullets are dropped (title+id only) to keep the
-    banner skimmable; full detail stays one `waypoints.py show <id>` away."""
+    ids are intentionally NOT printed here — they read as a redundant restatement of the title
+    right next to them; use `waypoints.py list`/`show <id>` to get an item's id when needed.
+    Past COMPACT_THRESHOLD open items, sub-bullets are dropped (title only) to keep the banner
+    skimmable; full detail stays one `waypoints.py show <id>` away."""
     if not items:
         return ""
     compact = len(items) > COMPACT_THRESHOLD
-    lines = [
-        f"🧭 waypoints: {len(items)} open waypoint(s) still ahead — they persist until done. "
-        f"Just ask me to add or complete one; disable via /plugin if unwanted:"
-    ]
+    header = (f"🧭 waypoints: {len(items)} open waypoint(s) still ahead — they persist until "
+               f"done. Just ask me to add or complete one; disable via /plugin if unwanted:")
+    lines = [_wrap(header, "")]
     if compact:
-        lines.append("  (compact mode — run `waypoints.py show <id>` for an item's sub-bullets)")
+        lines.append(_wrap("(compact mode — run `waypoints.py show <id>` for an item's "
+                            "sub-bullets)", "  "))
     for i in items:
         since = f"  (since {i['created']})" if i.get("created") else ""
-        lines.append(f"  • {i['title']}{since}  [{i['id']}]")
+        lines.append(_wrap(f"{i['title']}{since}", "  • "))
         if not compact:
             for point in i.get("summary") or []:
-                lines.append(f"      - {point}")
+                lines.append(_wrap(point, "      - "))
     return "\n".join(lines)
