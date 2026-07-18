@@ -69,7 +69,7 @@ plugin so updates/reinstalls never touch your data.
 ## Install
 
 ```
-/plugin marketplace add haiggoh/claude-code-desktop-sync
+/plugin marketplace add haiggoh/get-haiggoh
 /plugin install waypoints@haiggoh
 ```
 
