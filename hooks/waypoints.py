@@ -26,8 +26,13 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-BANNER_WAIT_S = float(os.environ.get("WAYPOINTS_BANNER_WAIT_S") or 0.75)
-BANNER_POLL_S = float(os.environ.get("WAYPOINTS_BANNER_POLL_S") or 0.05)
+# Wait cap for resume-interrupted's flag so its banner lands first. Trimmed 0.75->0.5 (v0.1.11):
+# resume-interrupted writes its flag ALWAYS (even on clean sessions) and early-exit below breaks
+# as soon as it appears, so the full cap only bites on a slow/racy startup — 0.5s keeps ordering
+# headroom while shaving the worst case. Only resume-interrupted ordering matters (no-hidden-changes
+# is rare). Both tunable via env. Poll tightened 0.05->0.03 so the flag is noticed sooner.
+BANNER_WAIT_S = float(os.environ.get("WAYPOINTS_BANNER_WAIT_S") or 0.5)
+BANNER_POLL_S = float(os.environ.get("WAYPOINTS_BANNER_POLL_S") or 0.03)
 
 
 def _settings_path():
