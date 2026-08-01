@@ -191,6 +191,51 @@ def test_cli_reorder_missing_id_errors(tmp_path):
     assert r.returncode == 1
 
 
+# ---- v0.1.12: done --as + unresolved-title guard ----
+
+def test_cli_done_as_rewrites_title_and_closes(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Confirm qwen thinking works"], store, "2026-08-01")
+    r = _run([CLI, "done", "confirm-qwen-thinking-works", "--as",
+              "Confirmed: qwen thinking + native tools work"], store, "2026-08-01")
+    assert r.returncode == 0
+    lst = _run([CLI, "list"], store, "2026-08-01").stdout
+    assert "✓ [confirm-qwen-thinking-works] Confirmed: qwen thinking" in lst  # retitled + done
+    assert "Confirm qwen thinking works" not in lst                          # old question gone
+    assert _run([HOOK], store, "2026-08-01").stdout.strip() == ""            # closed → no banner
+
+
+def test_cli_done_warns_on_unresolved_title_without_as(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Decide + open the PRs"], store, "2026-08-01")
+    r = _run([CLI, "done", "decide-open-the-prs"], store, "2026-08-01")
+    assert r.returncode == 0                       # still closes (non-blocking guard)
+    assert "marked done" in r.stdout
+    assert "⚠️" in r.stderr and "--as" in r.stderr  # nudge on stderr with the fix
+
+
+def test_cli_done_quiet_when_as_given_on_unresolved_title(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Verify the fix holds"], store, "2026-08-01")
+    r = _run([CLI, "done", "verify-the-fix-holds", "--as", "Verified: fix holds"], store, "2026-08-01")
+    assert r.returncode == 0
+    assert "⚠️" not in r.stderr                     # resolution recorded → no nudge
+
+
+def test_cli_done_quiet_on_plain_imperative_title(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Publish the PR"], store, "2026-08-01")
+    r = _run([CLI, "done", "publish-the-pr"], store, "2026-08-01")
+    assert r.returncode == 0
+    assert "⚠️" not in r.stderr                     # plain task imperative reads fine as done
+
+
+def test_cli_done_missing_id_still_errors(tmp_path):
+    store = tmp_path / "s.json"
+    r = _run([CLI, "done", "nope"], store, "2026-08-01")
+    assert r.returncode == 1 and "no such id" in r.stdout
+
+
 def _settings(tmp_path, enabled):
     p = tmp_path / "settings.json"
     p.write_text(json.dumps({"enabledPlugins": enabled}))

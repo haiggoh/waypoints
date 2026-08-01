@@ -39,7 +39,7 @@ waypoints.py list                       # Claude Code v2.1.91+ puts the plugin's
 waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on YYYY-MM-DD]
 waypoints.py edit <id> [--title "…"] [--point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on]
 waypoints.py show <id>                  # print title + summary + full detail (the "pick it up" view)
-waypoints.py done <id>                  # marking done removes it from the banner
+waypoints.py done <id> [--as "outcome"] # mark done; --as rewrites the title to the resolution
 waypoints.py reopen <id>                # undo done (inverse of `done`)
 waypoints.py toggle <id>                # flip an item's done state in one call
 waypoints.py priority <id> <level>      # int; higher sorts earlier in the banner (default 0)
@@ -54,6 +54,15 @@ didn't hold), use `reopen` rather than re-`add`ing — same reason as `edit`: ke
 `toggle` is a one-call convenience when you don't know or care which state it's currently in.
 Use `priority` when an item should consistently jump the queue (urgent/blocking); use `reorder`
 only for a one-off manual ordering that doesn't fit the priority model.
+
+**Resolve before you close.** When a waypoint's title reads as an open question or pending decision
+("Confirm X works", "Decide + open the PRs", "Test whether Y…"), a bare `done` leaves the ✓ next to
+an unanswered question — the record then contradicts itself and the *outcome* is lost. Close it with
+`done <id> --as "what actually happened"` so the title states the resolution in one atomic call
+(keeps the `id`/`created`, no separate `edit` needed). Plain task imperatives ("Fix the bug",
+"Publish the PR") read fine as done and need no `--as`. If you `done` an open-question title without
+`--as`, the CLI prints a non-blocking ⚠️ reminder with the exact `--as` re-run — heed it rather than
+leaving the stale question closed.
 The bare command is **`waypoints.py`** — that's the shipped filename; note the `.py` (bare
 `waypoints` will not resolve). If it isn't on PATH (older Claude Code), fall back to
 `python3 "$CLAUDE_PLUGIN_ROOT/bin/waypoints.py"` while a skill/hook is running, or edit

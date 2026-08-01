@@ -344,3 +344,49 @@ def test_reorder_item_clamps_out_of_range_position():
 
 def test_reorder_item_missing_id_returns_false():
     assert c.reorder_item([], "nope", 0) is False
+
+
+# ---- v0.1.12: looks_unresolved heuristic + done --as (resolve-before-close) ----
+
+def test_looks_unresolved_matches_trailing_question_mark():
+    assert c.looks_unresolved("Does the new flow work?") is True
+
+
+def test_looks_unresolved_matches_leading_inquiry_verbs():
+    for t in ["Confirm qwen thinking works", "Decide + open the PRs", "Test CC Live behavior",
+              "Verify the fix holds", "Research the best model", "Investigate the crash",
+              "Evaluate Kimi-VL", "Compare A vs B", "Head-to-head: X vs Y",
+              "Whether to ship now", "Should we migrate"]:
+        assert c.looks_unresolved(t) is True, t
+
+
+def test_looks_unresolved_ignores_plain_task_imperatives():
+    for t in ["Fix the login bug", "Add a logout button", "Build the artwork",
+              "Publish the PR", "Finish the plugin", "Run the backup"]:
+        assert c.looks_unresolved(t) is False, t
+
+
+def test_looks_unresolved_empty_or_none_is_false():
+    assert c.looks_unresolved("") is False
+    assert c.looks_unresolved(None) is False
+
+
+def test_looks_unresolved_leader_is_word_boundary_not_prefix():
+    # "Testing" / "Addendum" start with a leader substring but aren't the inquiry verb.
+    assert c.looks_unresolved("Testing infrastructure rollout") is False
+    assert c.looks_unresolved("Confirmation email template") is False
+
+
+def test_mark_done_with_resolved_title_rewrites_and_closes():
+    items = [{"id": "k", "title": "Confirm X works", "created": "2026-08-01", "done": False}]
+    assert c.mark_done(items, "k", resolved_title="Confirmed: X works in prod") is True
+    assert items[0]["title"] == "Confirmed: X works in prod"
+    assert items[0]["done"] is True
+    assert items[0]["id"] == "k" and items[0]["created"] == "2026-08-01"  # immutable
+
+
+def test_mark_done_without_resolved_title_leaves_title_untouched():
+    items = [{"id": "k", "title": "Confirm X works", "done": False}]
+    assert c.mark_done(items, "k") is True
+    assert items[0]["title"] == "Confirm X works"
+    assert items[0]["done"] is True

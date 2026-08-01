@@ -6,7 +6,8 @@
     waypoints edit <id> [--title …] [--point "…" ...] [--clear-summary] [--detail …]
                         [--surface-on YYYY-MM-DD] [--clear-surface-on]
     waypoints show <id>                  # print title + summary + full detail (the "pick it up" view)
-    waypoints done <id>                  # mark an item done (removes it from the banner)
+    waypoints done <id> [--as "resolution"]  # mark done; --as rewrites the title to the outcome
+                                             # (use it when the title reads as an open question)
     waypoints reopen <id>                # undo done (inverse of `done`)
     waypoints toggle <id>                # flip an item's done state
     waypoints priority <id> <level>      # set banner priority (int; higher shows earlier)
@@ -53,6 +54,9 @@ def main(argv=None):
 
     pd = sub.add_parser("done", help="mark an item done by id")
     pd.add_argument("id")
+    pd.add_argument("--as", dest="resolved", default=None, metavar="RESOLUTION",
+                    help="rewrite the title to this resolution phrasing while closing (one call "
+                         "instead of edit+done); use it when the title reads as an open question")
 
     pr = sub.add_parser("reopen", help="undo done on an item by id (inverse of `done`)")
     pr.add_argument("id")
@@ -133,10 +137,22 @@ def main(argv=None):
         return 0
 
     if args.cmd == "done":
-        ok = c.mark_done(items, args.id)
+        it = c.get_item(items, args.id)
+        ok = c.mark_done(items, args.id, resolved_title=args.resolved)
         c.save_store(store)
-        print(f"marked done: {args.id}" if ok else f"no such id: {args.id}")
-        return 0 if ok else 1
+        if not ok:
+            print(f"no such id: {args.id}")
+            return 1
+        print(f"marked done: {args.id}")
+        # Point-of-action guard: if the title still reads as an open question/decision and no
+        # resolution was recorded, nudge (non-blocking — the close already happened) so a bare ✓
+        # doesn't leave the answer implicit. Re-running `done --as` on a done item is safe.
+        if args.resolved is None and it is not None and c.looks_unresolved(it.get("title", "")):
+            print(
+                f"⚠️  This title reads as an open question — its ✓ won't say how it resolved.\n"
+                f"    Record the outcome:  waypoints.py done {args.id} --as \"<what actually happened>\"",
+                file=sys.stderr)
+        return 0
 
     if args.cmd == "reopen":
         ok = c.reopen_item(items, args.id)

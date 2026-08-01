@@ -130,9 +130,38 @@ def edit_item(items, item_id, title=_UNSET, summary=_UNSET, detail=_UNSET, surfa
     return it
 
 
-def mark_done(items, item_id):
+# Leading words that make a title read as an unanswered inquiry/decision rather than a task. A ✓
+# on "Confirm X" / "Decide Y" hides the ANSWER (did it work? what was decided?), which is the
+# prose-vs-status contradiction this guard exists to catch. Plain task imperatives (fix, add,
+# build, publish, finish, run…) are intentionally NOT here — "Fix login bug ✓" reads fine as done.
+_INQUIRY_LEADERS = frozenset({
+    "confirm", "verify", "check", "test", "decide", "research", "investigate",
+    "evaluate", "determine", "assess", "explore", "compare", "figure", "whether",
+    "should", "head-to-head",
+})
+
+
+def looks_unresolved(title):
+    """True if `title` reads as an open question/decision that a bare ✓ would leave contradictory.
+    Pure and side-effect-free so the CLI guard and tests share one definition. Matches a trailing
+    '?' or a leading inquiry/decision verb (see _INQUIRY_LEADERS)."""
+    t = (title or "").strip()
+    if not t:
+        return False
+    if t.rstrip().endswith("?"):
+        return True
+    first = re.split(r"[\s:]+", t.lower(), maxsplit=1)[0].strip(".,")
+    return first in _INQUIRY_LEADERS
+
+
+def mark_done(items, item_id, resolved_title=None):
+    """Mark an item done. If `resolved_title` is given, rewrite the title to that resolution phrasing
+    first (the one-call replacement for edit+done) — `id`/`created` stay immutable, same as `edit`.
+    Returns True if the item existed."""
     for i in items:
         if i.get("id") == item_id:
+            if resolved_title is not None:
+                i["title"] = resolved_title
             i["done"] = True
             return True
     return False
