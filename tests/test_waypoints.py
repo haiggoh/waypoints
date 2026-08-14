@@ -1,3 +1,5 @@
+import pytest
+
 import waypoints_core as c
 
 
@@ -390,3 +392,207 @@ def test_mark_done_without_resolved_title_leaves_title_untouched():
     assert c.mark_done(items, "k") is True
     assert items[0]["title"] == "Confirm X works"
     assert items[0]["done"] is True
+
+
+# ---- optional triage verdict (tier + gate reason) ----
+
+def _legacy():
+    """An item as written before verdicts existed: no `tier` key at all."""
+    return {"id": "old", "title": "Old", "summary": [], "detail": "",
+            "surface_on": None, "created": "2026-01-01", "done": False, "priority": 0}
+
+
+def test_add_item_writes_no_verdict_keys_by_default():
+    items = []
+    it = c.add_item(items, "Plain")
+    # ABSENT, not None: a store written before verdicts existed must stay byte-comparable.
+    assert "tier" not in it and "gate_reason" not in it
+
+
+def test_add_item_with_verdict_stores_both():
+    items = []
+    it = c.add_item(items, "Blocked", tier="gated", gate_reason="needs the user present")
+    assert it["tier"] == "gated" and it["gate_reason"] == "needs the user present"
+
+
+def test_legacy_item_is_untriaged_not_actionable():
+    it = _legacy()
+    assert c.is_untriaged(it)
+    assert not c.is_actionable(it) and not c.is_gated(it)
+
+
+def test_validate_verdict_rejects_unknown_tier():
+    with pytest.raises(c.VerdictError):
+        c.validate_verdict("urgent")
+
+
+def test_validate_verdict_rejects_gate_reason_on_non_gated():
+    # A reason on a non-gated item is a record that disagrees with itself.
+    with pytest.raises(c.VerdictError):
+        c.validate_verdict("do-now", "waiting on nothing")
+
+
+def test_validate_verdict_allows_gate_reason_when_gated():
+    assert c.validate_verdict("gated", "needs a decision") == ("gated", "needs a decision")
+
+
+def test_set_verdict_clearing_removes_keys_entirely():
+    items = [c.add_item([], "X", tier="gated", gate_reason="blocked on CI")]
+    c.set_verdict(items, items[0]["id"], tier=None)
+    assert "tier" not in items[0] and "gate_reason" not in items[0]
+
+
+def test_set_verdict_retiering_away_from_gated_drops_the_inherited_reason():
+    # Unblocking an item is one call: the reason is orphaned by definition, so it goes.
+    items = []
+    it = c.add_item(items, "X", tier="gated", gate_reason="blocked on CI")
+    c.set_verdict(items, it["id"], tier="do-now")
+    assert it["tier"] == "do-now" and "gate_reason" not in it
+
+
+def test_set_verdict_refuses_an_explicit_reason_on_a_non_gated_tier():
+    # Inheriting a stale reason is a no-op worth silently fixing; ASKING for a reason on a
+    # do-now item is a contradiction of intent and is refused.
+    items = []
+    it = c.add_item(items, "X", tier="gated", gate_reason="blocked on CI")
+    with pytest.raises(c.VerdictError):
+        c.set_verdict(items, it["id"], tier="do-now", gate_reason="still blocked")
+
+
+def test_set_verdict_unknown_id_returns_none():
+    assert c.set_verdict([], "nope", tier="do-now") is None
+
+
+def test_partition_groups_are_exhaustive_and_disjoint():
+    items = [_legacy()]
+    c.add_item(items, "A", tier="do-now")
+    c.add_item(items, "B", tier="heavy")
+    c.add_item(items, "C", tier="gated", gate_reason="r")
+    g = c.partition(items)
+    assert len(g["actionable"]) == 2 and len(g["gated"]) == 1 and len(g["untriaged"]) == 1
+    # The property a reader relies on to know nothing was dropped:
+    assert sum(len(v) for v in g.values()) == len(items)
+
+
+# ---- list_payload: the documented machine-readable contract ----
+
+def test_list_payload_declares_its_own_contract_version():
+    p = c.list_payload([])
+    assert p["contract"] == c.LIST_CONTRACT
+    # Contract version is independent of the store version -- that's the decoupling.
+    assert c.LIST_CONTRACT is not None and "version" not in p
+
+
+def test_list_payload_counts_add_up():
+    items = [_legacy()]
+    c.add_item(items, "A", tier="do-now")
+    c.add_item(items, "G", tier="gated", gate_reason="r")
+    d = c.add_item(items, "Done", tier="heavy")
+    d["done"] = True
+    p = c.list_payload(items, "2026-07-20")
+    cts = p["counts"]
+    assert cts["total"] == 4 and cts["open"] == 3 and cts["done"] == 1
+    assert cts["gated"] + cts["actionable"] + cts["untriaged"] == cts["open"]
+
+
+def test_list_payload_normalizes_absent_verdict_to_null():
+    items = [_legacy()]
+    p = c.list_payload(items, "2026-07-20")
+    row = p["items"][0]
+    # Absent in the STORE, explicitly null in the VIEW: a consumer shouldn't have to tell a
+    # missing key from a null one.
+    assert row["tier"] is None and row["gate_reason"] is None
+    assert "tier" not in items[0]
+
+
+def test_list_payload_computes_surfaceability():
+    items = []
+    c.add_item(items, "Now")
+    c.add_item(items, "Later", surface_on="2099-01-01")
+    p = c.list_payload(items, "2026-07-20")
+    by_title = {i["title"]: i for i in p["items"]}
+    assert by_title["Now"]["surfaceable"] is True
+    assert by_title["Later"]["surfaceable"] is False
+
+
+# ---- banner: gated marking and length-driven collapse ----
+
+def _gated(n, prefix="G"):
+    items = []
+    for k in range(n):
+        c.add_item(items, f"{prefix}{k}", tier="gated", gate_reason=f"reason {k}")
+    return items
+
+
+def test_banner_marks_a_few_gated_items_inline():
+    items = _gated(2)
+    out = c.format_banner(items)
+    assert out.count("⛔") == 2
+    assert "G0" in out and "G1" in out
+
+
+def test_banner_collapses_gated_group_past_the_threshold():
+    n = c.GATED_COLLAPSE_THRESHOLD + 1
+    items = _gated(n)
+    out = c.format_banner(items)
+    assert f"⛔ {n} gated" in out            # the count is always stated
+    assert "G0" not in out                   # individual titles collapsed away
+    assert "waypoints-gated" in out          # and the way to expand is named
+
+
+def test_banner_header_count_stays_total_even_when_gated_collapse():
+    items = _gated(c.GATED_COLLAPSE_THRESHOLD + 1)
+    c.add_item(items, "Actionable one", tier="do-now")
+    out = c.format_banner(items)
+    assert f"{len(items)} open waypoint(s)" in out   # nothing hidden from the total
+
+
+def test_banner_does_not_reorder_gated_items():
+    # Anti-preference guarantee: a gated item keeps its position rather than being sorted last.
+    # Sorting it last would encode an assumption that something else consumes the other pile.
+    items = []
+    c.add_item(items, "Gated first", tier="gated", gate_reason="r")
+    c.add_item(items, "Actionable second", tier="do-now")
+    out = c.format_banner(items)
+    assert out.index("Gated first") < out.index("Actionable second")
+
+
+def test_banner_shows_the_gate_reason_when_not_compact():
+    items = _gated(1)
+    out = c.format_banner(items)
+    assert "gated: reason 0" in out
+
+
+def test_banner_unaffected_for_stores_with_no_verdicts():
+    # The whole feature is invisible to a user who never triages anything.
+    items = [_legacy()]
+    out = c.format_banner(items)
+    assert "⛔" not in out and "gated" not in out
+
+
+def test_wrap_never_splits_hyphenated_tokens():
+    # Regression: default textwrap broke `/waypoints-gated` across lines, leaving the user a
+    # command they cannot copy. Kebab-case ids hit the same bug, so this guards both.
+    long_id = "resume-interrupted-a-budget-caused-kill-on-a-later-utc-day"
+    # The padding matters: the token must STRADDLE the wrap boundary, or default textwrap has no
+    # occasion to split it and the test passes for the wrong reason. Verified that without
+    # break_on_hyphens=False this exact input yields "...-utc-\n    day".
+    out = c._wrap(f"xxxx pick up {long_id} now", "  • ")
+    assert "\n" in out, "input must actually wrap for this to test anything"
+    assert long_id in out, "hyphenated id was split across lines"
+    for line in out.splitlines():
+        assert not line.rstrip().endswith("-"), f"token split at a hyphen: {line!r}"
+
+
+def test_wrap_keeps_slash_commands_intact_at_a_boundary():
+    out = c._wrap("x" * 60 + " run /waypoints-gated to expand the group", "  ")
+    assert "/waypoints-gated" in out
+
+
+def test_banner_keeps_long_ids_intact():
+    items = []
+    c.add_item(items, "DISTILLER 0.7.0 — rename to claude-code-transcript-distiller everywhere",
+               tier="gated", gate_reason="outward-facing repo rename needs sign-off")
+    out = c.format_banner(items)
+    assert "claude-code-transcript-distiller" in out
+    assert "outward-facing" in out

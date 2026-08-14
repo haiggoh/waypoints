@@ -2,6 +2,9 @@
 """CLI to manage the waypoints store.
 
     waypoints list                       # show all items (surfaceable ones marked ▶)
+    waypoints list --json                # documented machine-readable contract (see list_payload)
+    waypoints list --gated|--actionable|--untriaged   # symmetric views; --open drops done items
+    waypoints triage <id> --tier do-now|heavy|gated [--gate-reason "…"] [--clear]
     waypoints add "Title" [--point "…" ...] [--detail ...] [--surface-on YYYY-MM-DD]
     waypoints edit <id> [--title …] [--point "…" ...] [--clear-summary] [--detail …]
                         [--surface-on YYYY-MM-DD] [--clear-surface-on]
@@ -20,6 +23,7 @@ Tiers: `title` (banner headline) + `summary` (short bullets, shown in banner via
 Store path: ~/.claude/waypoints.json (override with $WAYPOINTS_FILE).
 """
 import argparse
+import json
 import os
 import sys
 
@@ -30,7 +34,18 @@ import waypoints_core as c
 def main(argv=None):
     p = argparse.ArgumentParser(prog="waypoints", description="Manage waypoints reminders.")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("list", help="list all items")
+    pl = sub.add_parser("list", help="list all items")
+    pl.add_argument("--json", action="store_true",
+                    help="emit the documented machine-readable contract instead of text")
+    # Symmetric views, equal citizens: none is the default and none implies the others are
+    # someone else's problem. Untriaged is its own view because an unassessed item is not
+    # thereby actionable, and it must be findable rather than falling between the two.
+    view = pl.add_mutually_exclusive_group()
+    view.add_argument("--gated", action="store_true", help="only items whose verdict is gated")
+    view.add_argument("--actionable", action="store_true",
+                      help="only items whose verdict is do-now or heavy")
+    view.add_argument("--untriaged", action="store_true", help="only items with no verdict yet")
+    pl.add_argument("--open", action="store_true", help="exclude items already done")
     pa = sub.add_parser("add", help="add an open item")
     pa.add_argument("title")
     pa.add_argument("--point", action="append", default=None,
@@ -72,6 +87,15 @@ def main(argv=None):
     pro.add_argument("id")
     pro.add_argument("position", type=int)
 
+    pv = sub.add_parser("triage", help="record how an item can be picked up (tier + gate reason)")
+    pv.add_argument("id")
+    pv.add_argument("--tier", choices=c.TIERS, default=None,
+                    help="do-now (bounded) | heavy (may sprawl) | gated (needs something first)")
+    pv.add_argument("--gate-reason", default=None,
+                    help="what this item is waiting on (only valid with --tier gated)")
+    pv.add_argument("--clear", action="store_true",
+                    help="remove the verdict entirely, back to untriaged")
+
     sub.add_parser("prune", help="remove done items")
     args = p.parse_args(argv)
 
@@ -79,16 +103,51 @@ def main(argv=None):
     items = store["items"]
 
     if args.cmd == "list":
+        view = ("gated" if args.gated else "actionable" if args.actionable
+                else "untriaged" if args.untriaged else None)
+        sel = items
+        if args.open or view:
+            sel = [i for i in sel if not i.get("done")]
+        if view == "gated":
+            sel = [i for i in sel if c.is_gated(i)]
+        elif view == "actionable":
+            sel = [i for i in sel if c.is_actionable(i)]
+        elif view == "untriaged":
+            sel = [i for i in sel if c.is_untriaged(i)]
+
+        if args.json:
+            # Counts describe the WHOLE store (unfiltered) so a filtered view still tells the
+            # reader what it is a subset of -- a count that silently narrows with the filter is
+            # how a partial view gets mistaken for the total.
+            payload = c.list_payload(items)
+            if view or args.open:
+                keep = {i["id"] for i in sel}
+                payload["items"] = [it for it in payload["items"] if it["id"] in keep]
+                payload["view"] = view or "open"
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            return 0
+
         if not items:
             print("(no open waypoints)")
             return 0
+        if not sel:
+            print(f"(no {view} waypoints)" if view else "(nothing to show)")
+            return 0
         today = c.today()
         surf = {i["id"] for i in c.surfaceable(items, today)}
-        for i in items:
+        for i in sel:
             flag = "✓" if i.get("done") else ("▶" if i["id"] in surf else "·")
             so = f" surface_on={i['surface_on']}" if i.get("surface_on") else ""
             pr = f" priority={i['priority']}" if i.get("priority") else ""
-            print(f"  {flag} [{i['id']}] {i['title']}{so}{pr}")
+            tier = f" [{i['tier']}]" if i.get("tier") else ""
+            print(f"  {flag} [{i['id']}] {i['title']}{tier}{so}{pr}")
+            if i.get("gate_reason"):
+                print(f"      gated: {i['gate_reason']}")
+        if view is None:
+            g = c.partition([i for i in items if not i.get("done")])
+            print(f"\n  open: {len(g['actionable'])} actionable · {len(g['gated'])} gated · "
+                  f"{len(g['untriaged'])} untriaged"
+                  f"   (views: --actionable / --gated / --untriaged)")
         return 0
 
     if args.cmd == "add":
@@ -128,6 +187,11 @@ def main(argv=None):
         print(f"[{it['id']}] {it['title']}")
         for point in it.get("summary") or []:
             print(f"  - {point}")
+        if it.get("tier"):
+            line = f"verdict: {it['tier']}"
+            if it.get("gate_reason"):
+                line += f" — waiting on: {it['gate_reason']}"
+            print(f"  {line}")
         meta = f"created: {it.get('created')}   done: {it.get('done')}"
         if it.get("surface_on"):
             meta += f"   surface_on: {it['surface_on']}"
@@ -183,6 +247,35 @@ def main(argv=None):
         c.save_store(store)
         print(f"reordered: {args.id}" if ok else f"no such id: {args.id}")
         return 0 if ok else 1
+
+    if args.cmd == "triage":
+        if args.clear and (args.tier or args.gate_reason):
+            print("--clear cannot be combined with --tier/--gate-reason")
+            return 2
+        try:
+            if args.clear:
+                it = c.set_verdict(items, args.id, tier=None)
+            else:
+                kw = {}
+                if args.tier is not None:
+                    kw["tier"] = args.tier
+                if args.gate_reason is not None:
+                    kw["gate_reason"] = args.gate_reason
+                if not kw:
+                    print("nothing to set: pass --tier, --gate-reason, or --clear")
+                    return 2
+                it = c.set_verdict(items, args.id, **kw)
+        except c.VerdictError as e:
+            print(f"refused: {e}")
+            return 2
+        if it is None:
+            print(f"no such id: {args.id}")
+            return 1
+        c.save_store(store)
+        verdict = it.get("tier") or "untriaged"
+        extra = f" — {it['gate_reason']}" if it.get("gate_reason") else ""
+        print(f"triaged [{it['id']}] {verdict}{extra}")
+        return 0
 
     if args.cmd == "prune":
         before = len(items)

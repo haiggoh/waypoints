@@ -286,3 +286,116 @@ def test_hook_malformed_settings_file_disables_wait(tmp_path):
               env_extra={"CLAUDE_SETTINGS_FILE": str(settings), "TMPDIR": str(tmp_path)})
     assert r.returncode == 0
     assert "Publish the PR" in r.stdout
+
+
+# ---- list --json contract + symmetric views + triage ----
+
+def test_list_json_emits_the_documented_contract(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Ship it"], store, "2026-07-12")
+    r = _run([CLI, "list", "--json"], store, "2026-07-12")
+    assert r.returncode == 0
+    p = json.loads(r.stdout)
+    assert p["contract"] == 1
+    assert p["generated"] == "2026-07-12"
+    assert set(p["counts"]) == {"total", "open", "done", "surfaceable", "gated",
+                                "actionable", "untriaged"}
+    row = p["items"][0]
+    # Every documented field is present, and the verdict fields are null rather than missing.
+    for key in ("id", "title", "summary", "detail", "created", "surface_on", "done",
+                "priority", "surfaceable", "tier", "gate_reason"):
+        assert key in row, key
+    assert row["tier"] is None and row["gate_reason"] is None
+
+
+def test_list_json_counts_describe_the_whole_store_even_in_a_filtered_view(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "A"], store, "2026-07-12")
+    _run([CLI, "add", "B"], store, "2026-07-12")
+    _run([CLI, "triage", "b", "--tier", "gated", "--gate-reason", "needs a decision"],
+         store, "2026-07-12")
+    r = _run([CLI, "list", "--json", "--gated"], store, "2026-07-12")
+    p = json.loads(r.stdout)
+    assert p["view"] == "gated"
+    assert len(p["items"]) == 1 and p["items"][0]["title"] == "B"
+    # A filtered view still reports the totals it is a subset of.
+    assert p["counts"]["open"] == 2 and p["counts"]["gated"] == 1
+
+
+def test_symmetric_views_partition_the_open_items(tmp_path):
+    store = tmp_path / "s.json"
+    for t in ("A", "B", "C"):
+        _run([CLI, "add", t], store, "2026-07-12")
+    _run([CLI, "triage", "a", "--tier", "do-now"], store, "2026-07-12")
+    _run([CLI, "triage", "b", "--tier", "gated", "--gate-reason", "waiting on the vendor"],
+         store, "2026-07-12")
+    counts = {}
+    for view in ("actionable", "gated", "untriaged"):
+        r = _run([CLI, "list", "--json", f"--{view}"], store, "2026-07-12")
+        counts[view] = len(json.loads(r.stdout)["items"])
+    assert counts == {"actionable": 1, "gated": 1, "untriaged": 1}
+    # C is untriaged and must NOT be absorbed into actionable -- unassessed != unblocked.
+    r = _run([CLI, "list", "--json", "--actionable"], store, "2026-07-12")
+    assert [i["title"] for i in json.loads(r.stdout)["items"]] == ["A"]
+
+
+def test_list_text_view_reports_the_group_tally(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "A"], store, "2026-07-12")
+    _run([CLI, "triage", "a", "--tier", "heavy"], store, "2026-07-12")
+    r = _run([CLI, "list"], store, "2026-07-12")
+    assert "1 actionable" in r.stdout and "0 gated" in r.stdout
+    assert "--gated" in r.stdout          # the other views are discoverable from the default one
+
+
+def test_triage_refuses_a_gate_reason_on_a_non_gated_tier(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "A"], store, "2026-07-12")
+    r = _run([CLI, "triage", "a", "--tier", "do-now", "--gate-reason", "nope"],
+             store, "2026-07-12")
+    assert r.returncode == 2 and "refused" in r.stdout
+
+
+def test_triage_clear_returns_an_item_to_untriaged(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "A"], store, "2026-07-12")
+    _run([CLI, "triage", "a", "--tier", "gated", "--gate-reason", "blocked"], store, "2026-07-12")
+    r = _run([CLI, "triage", "a", "--clear"], store, "2026-07-12")
+    assert r.returncode == 0 and "untriaged" in r.stdout
+    saved = json.loads(store.read_text())["items"][0]
+    assert "tier" not in saved and "gate_reason" not in saved
+
+
+def test_triage_rejects_an_unknown_tier(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "A"], store, "2026-07-12")
+    r = _run([CLI, "triage", "a", "--tier", "urgent"], store, "2026-07-12")
+    assert r.returncode != 0          # argparse choices rejects it before it reaches the store
+
+
+def test_views_are_mutually_exclusive(tmp_path):
+    store = tmp_path / "s.json"
+    r = _run([CLI, "list", "--gated", "--actionable"], store, "2026-07-12")
+    assert r.returncode != 0
+
+
+def test_show_prints_the_verdict_and_gate_reason(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "A"], store, "2026-07-12")
+    _run([CLI, "triage", "a", "--tier", "gated", "--gate-reason", "needs you present"],
+         store, "2026-07-12")
+    r = _run([CLI, "show", "a"], store, "2026-07-12")
+    assert "gated" in r.stdout and "needs you present" in r.stdout
+
+
+def test_hook_banner_collapses_many_gated_items(tmp_path):
+    store = tmp_path / "s.json"
+    for k in range(5):
+        _run([CLI, "add", f"Blocked {k}"], store, "2026-07-12")
+        _run([CLI, "triage", f"blocked-{k}" if k else "blocked-0", "--tier", "gated",
+              "--gate-reason", "waiting"], store, "2026-07-12")
+    r = _run([HOOK], store, "2026-07-12")
+    payload = json.loads(r.stdout)
+    msg = payload["systemMessage"]
+    assert "gated" in msg
+    assert "5 open waypoint(s)" in msg      # total still stated

@@ -42,6 +42,9 @@ waypoints.py toggle adobe-publish   # flip done state in one call
 waypoints.py priority adobe-publish 5   # bump it ahead of others in the banner
 waypoints.py reorder adobe-publish 0    # or move it to an explicit position
 waypoints.py prune
+waypoints.py triage adobe-publish --tier gated --gate-reason "needs your call on A vs B"
+waypoints.py list --gated               # also --actionable / --untriaged, plus --open
+waypoints.py list --json                # documented machine-readable contract
 ```
 
 The command is `waypoints.py` (Claude Code v2.1.91+ adds the plugin's `bin/` to the Bash-tool PATH).
@@ -54,6 +57,31 @@ and `created` date, unlike a `done`+re-`add`.
 `--surface-on` is the **earliest** date an item appears — **not an expiry**. An item surfaces on and
 after that date and keeps showing every session until you mark it done.
 
+## Blocked items
+
+Some open items aren't waiting on effort, they're waiting on *something*. Mark those and say what:
+
+```sh
+waypoints.py triage adobe-publish --tier gated --gate-reason "needs your call on A vs B"
+```
+
+`--tier` is `do-now` (bounded, self-contained), `heavy` (doable alone but liable to sprawl), or
+`gated`. Retiering away from `gated` drops the reason in the same call, so unblocking is one command.
+
+In the banner, gated items are marked `⛔` in place. Once there are more than a few, the group
+collapses to one counted line naming `/waypoints-gated` to expand it — the **count is always
+stated**, so a collapsed group is disclosed, not hidden.
+
+Two things this deliberately does *not* do:
+
+- **It does not sort gated items last.** A gate reason is a question you owe yourself; burying it
+  would assume some other tool is working through the rest of the list for you. Collapse triggers on
+  group *length*, never on preference.
+- **It does not treat "untriaged" as "actionable".** An item nobody has assessed is not thereby
+  unblocked, so it gets its own view (`--untriaged`) instead of quietly padding the actionable pile.
+
+Triaging is entirely optional — leave it alone and the plugin behaves exactly as before.
+
 ## Store
 
 `~/.claude/waypoints.json` (override with `$WAYPOINTS_FILE`). It lives **outside** the
@@ -65,6 +93,26 @@ plugin so updates/reinstalls never touch your data.
     "surface_on": null, "created": "2026-07-12", "done": false }
 ] }
 ```
+
+`tier` and `gate_reason` are added only when you triage an item, and removed again by `--clear` — a
+store where you never triage anything is byte-identical to one from before the feature existed.
+
+**To read the queue from a script, use `list --json`, not this file.** It emits a contract versioned
+independently of the store, so the on-disk shape stays free to change:
+
+```json
+{ "contract": 1, "generated": "2026-08-14",
+  "counts": { "total": 12, "open": 9, "done": 3, "surfaceable": 9,
+              "gated": 2, "actionable": 4, "untriaged": 3 },
+  "items": [ { "id": "…", "title": "…", "summary": [], "detail": "…", "created": "…",
+               "surface_on": null, "done": false, "priority": 0, "surfaceable": true,
+               "tier": null, "gate_reason": null } ] }
+```
+
+`tier`/`gate_reason` are always present here and `null` when unset, so a consumer never has to tell
+a missing key from a null one. `gated + actionable + untriaged == open` — check it and you know
+nothing was dropped. Filtered views add `"view"` and narrow `items`, but `counts` keep describing the
+whole store.
 
 ## Install
 

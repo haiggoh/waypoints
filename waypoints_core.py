@@ -88,7 +88,94 @@ def _unique_id(items, base):
     return f"{base}-{n}"
 
 
-def add_item(items, title, detail="", surface_on=None, created=None, id=None, summary=None):
+# --- Optional triage verdict ----------------------------------------------------------------
+# A verdict says how an item can be picked up: `do-now` (bounded and self-contained), `heavy`
+# (doable alone but liable to sprawl), `gated` (needs something this store cannot supply).
+#
+# Both keys are ABSENT by default, not defaulted: an item nobody has assessed carries neither,
+# so every store written before this existed stays valid with no migration. "Untriaged" is a
+# real third state and NOT a synonym for actionable — an item nobody has looked at is not
+# thereby known to be unblocked. Views keep the three separate for exactly that reason.
+TIERS = ("do-now", "heavy", "gated")
+GATED = "gated"
+ACTIONABLE_TIERS = ("do-now", "heavy")
+
+
+class VerdictError(ValueError):
+    """An invalid tier, or a gate reason on an item that isn't gated."""
+
+
+def validate_verdict(tier, gate_reason=None):
+    """Raise VerdictError on a contradictory verdict; return (tier, gate_reason) unchanged.
+
+    A gate reason on a non-gated item is refused rather than quietly stored: it would be a
+    record that disagrees with itself, and the reason is what a reader acts on.
+    """
+    if tier is not None and tier not in TIERS:
+        raise VerdictError("tier must be one of %s (got %r)" % (", ".join(TIERS), tier))
+    if gate_reason and tier is not None and tier != GATED:
+        raise VerdictError("a gate reason only applies to a %r item (tier is %r)" % (GATED, tier))
+    return tier, gate_reason
+
+
+def tier_of(item):
+    """The item's tier, or None when it has never been triaged."""
+    return item.get("tier")
+
+
+def is_gated(item):
+    return item.get("tier") == GATED
+
+
+def is_actionable(item):
+    return item.get("tier") in ACTIONABLE_TIERS
+
+
+def is_untriaged(item):
+    return item.get("tier") is None
+
+
+def partition(items):
+    """Split into the three verdict groups. Every item lands in exactly one, so the counts
+    always add up to the input length — a reader can verify nothing was dropped."""
+    return {"gated": [i for i in items if is_gated(i)],
+            "actionable": [i for i in items if is_actionable(i)],
+            "untriaged": [i for i in items if is_untriaged(i)]}
+
+
+def set_verdict(items, item_id, tier=_UNSET, gate_reason=_UNSET):
+    """Set or clear an item's verdict in place. Pass tier=None to clear the verdict entirely
+    (which also drops any gate reason, since it would be orphaned). Returns the item, or None
+    if no such id. Raises VerdictError on a contradictory combination."""
+    it = get_item(items, item_id)
+    if it is None:
+        return None
+    new_tier = it.get("tier") if tier is _UNSET else tier
+    if gate_reason is _UNSET:
+        # An inherited reason is only meaningful while the item stays gated. Retiering to
+        # do-now/heavy drops it rather than erroring: the reason is orphaned by definition, so
+        # demanding a second call to clear it would buy nothing. An EXPLICIT reason passed
+        # alongside a non-gated tier is a different thing — a contradiction of intent — and
+        # validate_verdict still refuses that.
+        new_reason = it.get("gate_reason") if new_tier == GATED else None
+    else:
+        new_reason = gate_reason
+    if new_tier is None:
+        new_reason = None
+    validate_verdict(new_tier, new_reason)
+    # Absent, not null: a cleared verdict removes the keys so the item is byte-identical to
+    # one that was never triaged. Anything else would leak a tombstone into the store.
+    for key, val in (("tier", new_tier), ("gate_reason", new_reason)):
+        if val:
+            it[key] = val
+        else:
+            it.pop(key, None)
+    return it
+
+
+def add_item(items, title, detail="", surface_on=None, created=None, id=None, summary=None,
+             tier=None, gate_reason=None):
+    validate_verdict(tier, gate_reason)
     item = {
         "id": id or _unique_id(items, slugify(title)),
         "title": title,
@@ -99,6 +186,10 @@ def add_item(items, title, detail="", surface_on=None, created=None, id=None, su
         "done": False,
         "priority": 0,                                  # higher sorts earlier in the banner
     }
+    if tier:
+        item["tier"] = tier
+    if gate_reason:
+        item["gate_reason"] = gate_reason
     items.append(item)
     return item
 
@@ -229,7 +320,82 @@ def surfaceable(items, today_str):
     return out
 
 
+# --- Machine-readable list contract ---------------------------------------------------------
+# LIST_CONTRACT is versioned INDEPENDENTLY of the store's own `version`. That separation is the
+# whole point: a reader pins the output contract and the on-disk format stays free to change
+# underneath it. Documenting the raw store file instead would couple every reader to internals.
+LIST_CONTRACT = 1
+
+
+def list_payload(items, today_str=None):
+    """The `list --json` payload: a documented, stable view of the queue.
+
+    Shape (contract 1):
+      contract  int    — this contract's version, NOT the store's
+      generated str    — the date the view was computed (surfaceability depends on it)
+      counts    object — total, open, done, surfaceable, gated, actionable, untriaged
+      items     array  — every item, in store order, each with:
+                           id, title, summary[], detail, created, surface_on, done, priority,
+                           surfaceable (bool, computed), tier (str|null), gate_reason (str|null)
+
+    `tier`/`gate_reason` are always PRESENT here and null when unset — a consumer reading a
+    view should not have to distinguish a missing key from a null one. In the STORE they stay
+    absent; that asymmetry is deliberate and belongs to the boundary between the two.
+
+    gated + actionable + untriaged == open, so a consumer can verify no item was dropped.
+    """
+    today_str = today_str or today()
+    surf = {i["id"] for i in surfaceable(items, today_str)}
+    open_items = [i for i in items if not i.get("done")]
+    groups = partition(open_items)
+    out = []
+    for i in items:
+        out.append({
+            "id": i.get("id"),
+            "title": i.get("title", ""),
+            "summary": list(i.get("summary") or []),
+            "detail": i.get("detail", ""),
+            "created": i.get("created"),
+            "surface_on": i.get("surface_on"),
+            "done": bool(i.get("done")),
+            "priority": i.get("priority", 0),
+            "surfaceable": i.get("id") in surf,
+            "tier": i.get("tier"),
+            "gate_reason": i.get("gate_reason"),
+        })
+    return {
+        "contract": LIST_CONTRACT,
+        "generated": today_str,
+        "counts": {
+            "total": len(items),
+            "open": len(open_items),
+            "done": sum(1 for i in items if i.get("done")),
+            "surfaceable": len(surf),
+            "gated": len(groups["gated"]),
+            "actionable": len(groups["actionable"]),
+            "untriaged": len(groups["untriaged"]),
+        },
+        "items": out,
+    }
+
+
 COMPACT_THRESHOLD = 3
+
+# Mirrors COMPACT_THRESHOLD: past this many GATED items the group collapses to one counted line
+# rather than listing each. Set from COMPACT_THRESHOLD so the two stay consistent by default.
+#
+# What this deliberately does NOT do: reorder anything. Gated items keep their priority position
+# among the rest and are marked in place — sorting them last would encode an assumption that
+# something else consumes the other pile, i.e. a preference baked into the store's own output.
+# Collapse triggers on GROUP LENGTH alone. The count stays visible either way, so a collapsed
+# group is disclosed rather than hidden.
+#
+# The one apparent exception is not one: when the group DOES collapse, its items are not rendered
+# at all, so there is no position left to preserve — the summary line lands at the end because
+# that is where a summary belongs, not because gated work was demoted. Ordering is observable
+# only in the un-collapsed case, and there it is untouched (see the no-reorder test).
+GATED_COLLAPSE_THRESHOLD = int(os.environ.get("WAYPOINTS_GATED_COLLAPSE_THRESHOLD")
+                                or COMPACT_THRESHOLD)
 
 # Wrap width for banner lines. Overridable ($WAYPOINTS_BANNER_WIDTH) for tests.
 #
@@ -257,8 +423,14 @@ def _wrap(text, indent):
     first line's text (not its bullet marker). We wrap ourselves — Claude Code's message renderer
     (which shows this banner) has no knowledge of our indent, and keeping every emitted line under
     a conservative width stops that renderer from re-wrapping (and thus mangling) our lines."""
+    # break_on_hyphens=False / break_long_words=False: this banner is full of hyphenated tokens
+    # that MUST survive intact -- kebab-case item ids, `/slash-commands`, `--long-flags`. Default
+    # textwrap happily splits `/waypoints-gated` into `/waypoints-` + `gated`, which the user then
+    # cannot copy or run, and turns an id into two unrecognizable halves. Preferring a slightly
+    # over-long line to a broken token is the right trade for output whose job is to be actioned.
     return textwrap.fill(text, width=BANNER_WIDTH, initial_indent=indent,
-                          subsequent_indent=" " * len(indent))
+                          subsequent_indent=" " * len(indent),
+                          break_on_hyphens=False, break_long_words=False)
 
 
 def format_banner(items):
@@ -267,10 +439,16 @@ def format_banner(items):
     ids are intentionally NOT printed here — they read as a redundant restatement of the title
     right next to them; use `waypoints.py list`/`show <id>` to get an item's id when needed.
     Past COMPACT_THRESHOLD open items, sub-bullets are dropped (title only) to keep the banner
-    skimmable; full detail stays one `waypoints.py show <id>` away."""
+    skimmable; full detail stays one `waypoints.py show <id>` away.
+
+    Gated items are marked ⛔ in place. Past GATED_COLLAPSE_THRESHOLD of them they collapse to a
+    single counted line instead — the count is always stated, so nothing is silently dropped."""
     if not items:
         return ""
-    compact = len(items) > COMPACT_THRESHOLD
+    gated = [i for i in items if is_gated(i)]
+    collapse_gated = len(gated) > GATED_COLLAPSE_THRESHOLD
+    shown = [i for i in items if not (collapse_gated and is_gated(i))] if collapse_gated else items
+    compact = len(shown) > COMPACT_THRESHOLD
     header = (f"🧭 waypoints: {len(items)} open waypoint(s) still ahead — they persist until "
                f"done. Just ask me to add or complete one; disable via /plugin if unwanted:")
     lines = [_wrap(header, "")]
@@ -278,9 +456,10 @@ def format_banner(items):
         lines.append(_wrap("(compact mode — run `waypoints.py show <id>` for an item's "
                             "sub-bullets)", "  "))
     bullet_indent = "  • "
+    gated_indent = "  ⛔ "
     date_indent = " " * len(bullet_indent)
-    for i in items:
-        lines.append(_wrap(i["title"], bullet_indent))
+    for i in shown:
+        lines.append(_wrap(i["title"], gated_indent if is_gated(i) else bullet_indent))
         # The date always gets its own line, hanging-indented under the title, so its
         # placement/indentation is fixed regardless of title length or pane width --
         # unlike appending it to the title line, this needs no wrap heuristics.
@@ -289,4 +468,10 @@ def format_banner(items):
         if not compact:
             for point in i.get("summary") or []:
                 lines.append(_wrap(point, "      - "))
+            if is_gated(i) and i.get("gate_reason"):
+                lines.append(_wrap(f"gated: {i['gate_reason']}", "      - "))
+    if collapse_gated:
+        lines.append(_wrap(f"⛔ {len(gated)} gated — each needs something before it can move. "
+                            f"Run `/waypoints-gated` (or `waypoints.py list --gated`) to see them "
+                            f"and why.", "  "))
     return "\n".join(lines)
