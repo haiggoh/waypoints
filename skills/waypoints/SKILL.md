@@ -73,7 +73,10 @@ waypoints.py list --json                # the documented contract above (for rea
 waypoints.py list --gated|--actionable|--untriaged [--open]   # symmetric views
 waypoints.py triage <id> --tier do-now|heavy|gated [--gate-reason "…"] | --clear
 waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on YYYY-MM-DD]
-waypoints.py edit <id> [--title "…"] [--point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on]
+waypoints.py edit <id> [--title "…"] [--add-point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on]
+#   --add-point APPENDS a bullet, keeping the existing ones — this is what you want when recording new information.
+#   --point REPLACES the entire bullet list. It is REFUSED when the item already has bullets unless you
+#   also pass --replace-points; the refusal prints the bullets it would have discarded.
 waypoints.py show <id>                  # print title + summary + full detail (the "pick it up" view)
 waypoints.py done <id> [--as "outcome"] # mark done; --as rewrites the title to the resolution
 waypoints.py reopen <id>                # undo done (inverse of `done`)

@@ -6,7 +6,8 @@
     waypoints list --gated|--actionable|--untriaged   # symmetric views; --open drops done items
     waypoints triage <id> --tier do-now|heavy|gated [--gate-reason "…"] [--clear]
     waypoints add "Title" [--point "…" ...] [--detail ...] [--surface-on YYYY-MM-DD]
-    waypoints edit <id> [--title …] [--point "…" ...] [--clear-summary] [--detail …]
+    waypoints edit <id> [--title …] [--add-point "…" ...] [--clear-summary] [--detail …]
+                                         # --add-point APPENDS; --point REPLACES (guarded)
                         [--surface-on YYYY-MM-DD] [--clear-surface-on]
     waypoints show <id>                  # print title + summary + full detail (the "pick it up" view)
     waypoints done <id> [--as "resolution"]  # mark done; --as rewrites the title to the outcome
@@ -50,6 +51,9 @@ def main(argv=None):
     pa.add_argument("title")
     pa.add_argument("--point", action="append", default=None,
                     help="a short summary bullet shown in the banner (repeatable)")
+    pa.add_argument("--add-point", action="append", default=None, metavar="POINT",
+                    help="alias of --point (a new item has no bullets to lose); accepted so the "
+                         "safe verb works the same on add and edit")
     pa.add_argument("--detail", default="")
     pa.add_argument("--surface-on", default=None,
                     help="earliest date to surface (YYYY-MM-DD); NOT an expiry — persists until done")
@@ -58,7 +62,14 @@ def main(argv=None):
     pe.add_argument("id")
     pe.add_argument("--title", default=None, help="new title (does NOT change the id)")
     pe.add_argument("--point", action="append", default=None,
-                    help="replace the summary bullets (repeatable); pass none + --clear-summary to empty")
+                    help="REPLACE every summary bullet (destructive). Refuses when the item already "
+                         "has bullets unless --replace-points is also given. To keep the existing "
+                         "bullets and add one, use --add-point instead")
+    pe.add_argument("--add-point", action="append", default=None, metavar="POINT",
+                    help="append a summary bullet, KEEPING the existing ones (safe; repeatable). "
+                         "This is almost always what you want when recording new information")
+    pe.add_argument("--replace-points", action="store_true",
+                    help="confirm that --point may discard the item's existing bullets")
     pe.add_argument("--clear-summary", action="store_true", help="remove all summary bullets")
     pe.add_argument("--detail", default=None, help="new detail; pass \"\" to clear it")
     pe.add_argument("--surface-on", default=None, help="set the earliest-surface date (YYYY-MM-DD)")
@@ -152,19 +163,50 @@ def main(argv=None):
 
     if args.cmd == "add":
         it = c.add_item(items, args.title, detail=args.detail, surface_on=args.surface_on,
-                        summary=args.point)
+                        summary=(args.point or []) + (args.add_point or []) or None)
         c.save_store(store)
         print(f"added [{it['id']}] {it['title']}")
         return 0
 
     if args.cmd == "edit":
+        existing = c.get_item(items, args.id)
+        if existing is None:
+            print(f"no such id: {args.id}")
+            return 1
+        old_points = list(existing.get("summary") or [])
+
+        def _echo_discarded(verb):
+            # Print them so they land in the session transcript and stay recoverable.
+            print(f"{verb} {len(old_points)} existing summary bullet(s):")
+            for point in old_points:
+                print(f"    - {point}")
+
         kwargs = {}
         if args.title is not None:
             kwargs["title"] = args.title
         if args.clear_summary:
+            if args.point or args.add_point:
+                print("--clear-summary cannot be combined with --point/--add-point")
+                return 2
+            if old_points:
+                _echo_discarded("clearing")
             kwargs["summary"] = []
+        elif args.add_point:
+            if args.point:
+                print("pass either --point (replace) or --add-point (append), not both")
+                return 2
+            kwargs["summary"] = old_points + list(args.add_point)
         elif args.point is not None:
-            kwargs["summary"] = args.point
+            if old_points and not args.replace_points:
+                print(f"refusing to discard {len(old_points)} summary bullet(s) on [{args.id}].")
+                print("  --point REPLACES the whole bullet list; it does not append.")
+                _echo_discarded("  would discard")
+                print("  To add to them:      --add-point \"…\"")
+                print("  To really replace:   --replace-points --point \"…\"")
+                return 2
+            if old_points:
+                _echo_discarded("replacing")
+            kwargs["summary"] = list(args.point)
         if args.detail is not None:
             kwargs["detail"] = args.detail
         if args.clear_surface_on:

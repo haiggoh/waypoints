@@ -399,3 +399,93 @@ def test_hook_banner_collapses_many_gated_items(tmp_path):
     msg = payload["systemMessage"]
     assert "gated" in msg
     assert "5 open waypoint(s)" in msg      # total still stated
+
+
+# --- guarded summary mutation (0.3.0) -------------------------------------
+# Regression cover for a real incident: `edit --point` REPLACES the bullet list, but
+# every doc surface (including the SessionStart banner) taught it as the way to record
+# new information, so agents used it as if it appended and silently destroyed bullets
+# on 8 items. `--point` must now fail closed; `--add-point` is the appending verb.
+
+def _bullets(store, wid):
+    items = json.load(open(store))
+    items = items["items"] if isinstance(items, dict) and "items" in items else items
+    return [i for i in items if i["id"] == wid][0].get("summary") or []
+
+
+def _seed(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Test item", "--point", "bullet A", "--point", "bullet B"], store)
+    return store
+
+
+def test_edit_point_refuses_to_discard_existing_bullets(tmp_path):
+    store = _seed(tmp_path)
+    r = _run([CLI, "edit", "test-item", "--point", "new only"], store)
+    assert r.returncode == 2, r.stdout
+    assert "refusing to discard 2" in r.stdout
+    # the discarded text is echoed so it stays recoverable from the transcript
+    assert "bullet A" in r.stdout and "bullet B" in r.stdout
+    assert "--add-point" in r.stdout and "--replace-points" in r.stdout
+    assert _bullets(store, "test-item") == ["bullet A", "bullet B"]  # untouched
+
+
+def test_edit_add_point_appends(tmp_path):
+    store = _seed(tmp_path)
+    r = _run([CLI, "edit", "test-item", "--add-point", "bullet C"], store)
+    assert r.returncode == 0
+    assert _bullets(store, "test-item") == ["bullet A", "bullet B", "bullet C"]
+
+
+def test_edit_replace_points_confirms_and_echoes(tmp_path):
+    store = _seed(tmp_path)
+    r = _run([CLI, "edit", "test-item", "--replace-points", "--point", "replaced"], store)
+    assert r.returncode == 0
+    assert "replacing 2" in r.stdout and "bullet A" in r.stdout
+    assert _bullets(store, "test-item") == ["replaced"]
+
+
+def test_edit_point_still_works_when_no_bullets_exist(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Bare item"], store)
+    r = _run([CLI, "edit", "bare-item", "--point", "first bullet"], store)
+    assert r.returncode == 0, r.stdout
+    assert _bullets(store, "bare-item") == ["first bullet"]
+
+
+def test_edit_rejects_point_and_add_point_together(tmp_path):
+    store = _seed(tmp_path)
+    r = _run([CLI, "edit", "test-item", "--point", "x", "--add-point", "y"], store)
+    assert r.returncode == 2
+    assert _bullets(store, "test-item") == ["bullet A", "bullet B"]
+
+
+def test_clear_summary_echoes_what_it_dropped(tmp_path):
+    store = _seed(tmp_path)
+    r = _run([CLI, "edit", "test-item", "--clear-summary"], store)
+    assert r.returncode == 0
+    assert "clearing 2" in r.stdout and "bullet A" in r.stdout
+    assert _bullets(store, "test-item") == []
+
+
+def test_add_accepts_add_point_alias(tmp_path):
+    store = tmp_path / "s.json"
+    r = _run([CLI, "add", "Alias item", "--add-point", "a1"], store)
+    assert r.returncode == 0
+    assert _bullets(store, "alias-item") == ["a1"]
+
+
+def test_edit_missing_id_reports_before_touching_summary(tmp_path):
+    store = _seed(tmp_path)
+    r = _run([CLI, "edit", "no-such-item", "--add-point", "x"], store)
+    assert r.returncode == 1 and "no such id" in r.stdout
+
+
+def test_banner_teaches_add_point_not_bare_point_for_edits(tmp_path):
+    # The banner is where the wrong verb was learned; it must now teach the safe one.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Something open"], store)
+    r = _run([HOOK], store, "2026-07-12")
+    ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+    assert "--add-point" in ctx
+    assert "--replace-points" in ctx

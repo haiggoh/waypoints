@@ -34,7 +34,8 @@ the hood it uses the bundled CLI, which you can also run yourself (or edit the J
 ```sh
 waypoints.py list
 waypoints.py add "Publish the PR" --point "branch fix/x" --point "re-verify first" --detail "see repo X" --surface-on 2026-07-13
-waypoints.py edit adobe-publish --title "Publish the PR (rebased)" --point "branch fix/x2"
+waypoints.py edit adobe-publish --title "Publish the PR (rebased)" --add-point "branch fix/x2"   # APPENDS
+waypoints.py edit adobe-publish --replace-points --point "only bullet now"                       # REPLACES (must be explicit)
 waypoints.py show adobe-publish     # title + summary + full detail — the "pick it up" view
 waypoints.py done adobe-publish
 waypoints.py reopen adobe-publish   # undo a mistaken done
@@ -50,7 +51,7 @@ waypoints.py list --json                # documented machine-readable contract
 The command is `waypoints.py` (Claude Code v2.1.91+ adds the plugin's `bin/` to the Bash-tool PATH).
 
 Each item has **three tiers** so the banner stays tidy without losing context: a short `title`
-(headline), a few `summary` bullets (`--point`, shown under the title), and a full `detail` dump
+(headline), a few `summary` bullets (`--add-point` to append, `--point` to replace the whole list — the latter is refused on an item that already has bullets unless `--replace-points` is given), and a full `detail` dump
 (on-demand only — read it with `show`). Use `edit` to change an item **in place**: it keeps the `id`
 and `created` date, unlike a `done`+re-`add`.
 
