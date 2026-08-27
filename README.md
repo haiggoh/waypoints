@@ -96,7 +96,8 @@ waypoints.py journal --since 2026-08-01     # from a date (or a full ISO stamp)
 ```
 
 `~/.claude/waypoints-journal.jsonl` gets **one line per mutation**: the ISO timestamp, the raw
-`argv`, and the before/after of each item that actually changed. Raw argv because the literal
+`argv`, and the before/after of each item that actually changed. The reader shortens long argv
+values for display (a `--detail` dump is often paragraphs) — the file keeps them whole. Raw argv because the literal
 command is the forensic artifact — a prettified description reflects what the code *believed* it was
 doing, which is the very thing in question when you are reading back through history.
 

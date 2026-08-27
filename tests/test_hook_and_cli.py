@@ -873,3 +873,16 @@ def test_journal_survives_the_backup_ring_evicting_snapshots(tmp_path):
     assert len(snaps) <= core.BACKUP_KEEP_RECENT + 1        # ring bounded (+ the day baseline)
     first = [e for e in _jlines(store) if e["changes"][0]["before"] is None][0]
     assert first["changes"][0]["after"]["title"] == "Original title"
+
+
+def test_cli_journal_keeps_one_line_per_entry_despite_a_multiline_detail(tmp_path):
+    """A --detail value is often paragraphs long. Printed verbatim it buries the timestamps and
+    destroys the scannable layout, so the DISPLAY is shortened while the file keeps the raw argv."""
+    store = tmp_path / "s.json"
+    detail = "line one\n\nline two is quite a bit longer than sixty characters, easily so\nline three"
+    _run([CLI, "add", "Big item", "--detail", detail], store, "2026-08-27")
+    r = _run([CLI, "journal"], store, "2026-08-27")
+    body = [l for l in r.stdout.split("\n") if "waypoints add" in l]
+    assert len(body) == 1 and "line three" not in body[0] and "…" in body[0]
+    # the raw value is untouched on disk -- shortening is a rendering choice, not a data loss
+    assert _jlines(store)[-1]["argv"][-1] == detail

@@ -52,6 +52,23 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import waypoints_core as c
 
 
+JOURNAL_ARGV_TOKEN_MAX = 60
+
+
+def _journal_argv_token(arg):
+    """One argv token, shortened FOR DISPLAY only — the raw token stays in the file.
+
+    A `--detail` value is routinely a multi-paragraph dump, and printing it verbatim turns the
+    one-line-per-entry layout (the thing that makes the history scannable) into pages of prose
+    with the timestamps buried. Newlines are collapsed first, because a single embedded newline
+    is enough to break the format regardless of length.
+    """
+    s = " ".join(str(arg).split())
+    if len(s) > JOURNAL_ARGV_TOKEN_MAX:
+        s = s[:JOURNAL_ARGV_TOKEN_MAX - 1].rstrip() + "…"
+    return s
+
+
 def _journal_change_line(ch):
     """One change, as a line. Shows WHICH FIELDS moved rather than dumping both item dicts —
     the raw before/after stay in the file for a reader that wants them, but an unsummarised
@@ -527,7 +544,7 @@ def main(argv=None):
                 print("(no journal entries match)")
             return 0
         for e in entries:
-            argv = " ".join(e.get("argv") or []) or "(no argv recorded)"
+            argv = " ".join(_journal_argv_token(a) for a in e.get("argv") or []) or "(no argv recorded)"
             src_tag = "" if e.get("source") == "store" else f" [{e.get('source')}]"
             print(f"  {e.get('at')}{src_tag}  waypoints {argv}")
             for ch in e.get("changes") or []:
