@@ -842,12 +842,22 @@ def test_cli_journal_survives_a_corrupt_line(tmp_path):
     assert r.returncode == 0 and "Survivor" in r.stdout
 
 
-def test_journal_is_reachable_by_the_env_var_that_moves_the_store(tmp_path):
-    # If $WAYPOINTS_FILE did not redirect the journal too, a test would append to the real one.
+def test_journal_is_reachable_by_the_env_var_that_moves_the_store(tmp_path, monkeypatch):
+    """If $WAYPOINTS_FILE does not redirect the journal too, a test appends to the REAL one.
+
+    This asserts the RESOLVED path, not merely that a file appeared in tmp_path. An earlier
+    version checked for the absence of `~/.claude/s-journal.jsonl` — a name nothing would ever
+    write — so a redirect straight to the real journal passed it. Verified by mutation: point
+    journal_path() at a hardcoded ~/.claude path and this test must go red.
+    """
+    import waypoints_core as core
     store = tmp_path / "s.json"
+    monkeypatch.setenv("WAYPOINTS_FILE", str(store))
+    resolved = core.journal_path()
+    assert resolved == _journal_file(store)
+    assert str(tmp_path) in resolved, "the journal escaped the test sandbox: %s" % resolved
     _run([CLI, "add", "Contained"], store, "2026-08-27")
     assert os.path.exists(_journal_file(store))
-    assert not os.path.exists(os.path.expanduser("~/.claude/s-journal.jsonl"))
 
 
 def test_journal_survives_the_backup_ring_evicting_snapshots(tmp_path):
