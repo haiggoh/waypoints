@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import textwrap
 
@@ -53,7 +54,11 @@ def archive_path(store=None):
 # How many recent snapshots the ring keeps, beyond the per-day baselines. A wrap-up burst can
 # write a dozen times in a minute, so this has to be comfortably larger than one burst or the
 # burst evicts the pre-session state — the one snapshot most worth having.
-BACKUP_KEEP_RECENT = 20
+#
+# 0.5.0 lowered this from 20 to 10. The ring no longer carries the history: the journal does,
+# permanently and at a fraction of the size, so a snapshot is now only a convenience for the
+# crude "put the whole file back" recovery. Ten still clears one wrap-up burst.
+BACKUP_KEEP_RECENT = 10
 
 # How many day-baselines (the first snapshot of each calendar day) survive the ring. These are
 # what make a burst non-destructive: promoting them out of the recent window means no amount of
@@ -233,13 +238,21 @@ def _backup_before_write(path, store_for_dir=None):
         return None
 
 
-def save_store(store, path=None):
-    """Persist the live store. BACKS UP the current file first — see _backup_before_write.
-    A plain atomic write is recoverable from a crash but not from a mistaken-but-valid
-    command, and the closed items we prune away are the paper trail, not noise."""
+def save_store(store, path=None, argv=None):
+    """Persist the live store. BACKS UP the current file first — see _backup_before_write —
+    and JOURNALS what changed. A plain atomic write is recoverable from a crash but not from a
+    mistaken-but-valid command, and the closed items we prune away are the paper trail, not noise.
+
+    Journaling lives HERE, not in the CLI, because every mutation reaches disk through this
+    function: wiring it into each subcommand instead would leave the next subcommand unrecorded.
+    `argv` defaults to sys.argv[1:] so no call site has to remember to pass it, and stays a
+    parameter so tests (and any non-CLI caller) can state the command explicitly.
+    """
     path = path or store_path()
+    before = load_store(path)["items"]
     _backup_before_write(path)
     _atomic_write(path, json.dumps(store, indent=2, ensure_ascii=False) + "\n")
+    _journal_save(argv, before, store.get("items") or [], "store", path)
     return path
 
 
@@ -258,16 +271,187 @@ def load_archive(path=None):
         return {"version": VERSION, "items": []}
 
 
-def save_archive(arch, path=None):
-    """Persist the archive, backing up first exactly like save_store — the archive IS the
-    paper trail, so it gets the same recoverable-write guarantee (append-only in spirit;
-    the backup is how a bad entry stays correctable)."""
+def save_archive(arch, path=None, argv=None):
+    """Persist the archive, backing up and journalling exactly like save_store — the archive IS
+    the paper trail, so it gets the same recoverable-write guarantee (append-only in spirit;
+    the backup is how a bad entry stays correctable). Its entries are tagged source="archive",
+    so a single `rm` shows as two lines — one removing the item from the store, one adding it
+    to the archive — and a move can be told apart from a loss."""
     path = path or archive_path()
+    before = load_archive(path)["items"]
     # store_path() so the archive's snapshots share the store's backup dir: one place to look
     # when reconstructing, and one retention policy governing the pair.
     _backup_before_write(path, store_path())
     _atomic_write(path, json.dumps(arch, indent=2, ensure_ascii=False) + "\n")
+    # store_path() for the same reason the backups use it: one journal for the pair, so the
+    # history of a move reads in order instead of being split across two files.
+    _journal_save(argv, before, arch.get("items") or [], "archive", store_path())
     return path
+
+
+# --- the journal: the authoritative history ---------------------------------------------
+#
+# Why a third layer, given the archive and the snapshot ring already exist: neither answers
+# "where did this go wrong". The archive records an item's FINAL state at closure; the ring is
+# BOUNDED (BACKUP_KEEP_RECENT), so an overwrite from three weeks ago is simply gone once its
+# snapshot ages out. A journal entry is one changed item plus the command that changed it —
+# roughly 50x smaller than a full-store snapshot — which is what lets it be permanent.
+#
+# The three layers are deliberately distinct, and merging them loses something each time:
+#   journal   -> authoritative history. Append-only, NEVER pruned. Small.
+#   snapshots -> a bounded convenience ring; freely deletable BECAUSE the journal exists.
+#   archive   -> the human-readable closure trail.
+#
+# Store + journal replayed backwards reconstructs any prior state, so nothing outside the
+# journal has to be durable for the history to survive.
+
+JOURNAL_CONTRACT = 1
+
+
+def journal_path(store=None):
+    """Where the mutation history lives. Derived from the store path exactly like the archive
+    and the backup dir, so $WAYPOINTS_FILE redirects the whole family with one env var.
+
+    `.jsonl`, not `.json`: one self-contained line per mutation is what makes an append a
+    single small write and a truncated tail skippable instead of fatal.
+    """
+    store = store or store_path()
+    return os.path.splitext(store)[0] + "-journal.jsonl"
+
+
+def _journal_stamp(when=None):
+    """Second-precision ISO stamp whose DATE half comes from today(), so $WAYPOINTS_TODAY moves
+    the journal's clock along with the rest of the tool — `--since` is date-based, and a fake
+    clock that only half-applied would make the filter untestable."""
+    if when is not None:
+        return when
+    return "%sT%s" % (today(), datetime.datetime.now().strftime("%H:%M:%S"))
+
+
+def _by_id(items):
+    """{id: (position, item)} for the well-formed entries. Malformed rows are skipped rather
+    than raising: the journal must never be the reason a mutation fails."""
+    out = {}
+    for pos, it in enumerate(items or []):
+        if isinstance(it, dict) and it.get("id"):
+            out[it["id"]] = (pos, it)
+    return out
+
+
+def diff_items(before, after):
+    """Per-item changes between two item lists, as [{id, before, after[, moved]}].
+
+    A generic differ rather than per-command bookkeeping. There are ~19 save call sites; a
+    record that has to be remembered at each one will be forgotten at the twentieth, and a
+    history with silent holes is worse than none because it reads as complete. Diffing also
+    records what actually CHANGED rather than what a command meant to change — the effect is
+    what a forensic reader needs, and the two are not always the same.
+
+    `moved` carries the before/after list positions when only the ORDER changed, so `reorder`
+    is not invisible: it mutates the store while leaving every item's fields untouched.
+    """
+    b, a = _by_id(before), _by_id(after)
+    order = list(b) + [k for k in a if k not in b]
+    out = []
+    for item_id in order:
+        b_pos, was = b.get(item_id, (None, None))
+        a_pos, now = a.get(item_id, (None, None))
+        if was == now and b_pos == a_pos:
+            continue
+        change = {"id": item_id, "before": was, "after": now}
+        if was == now and b_pos != a_pos:
+            change["moved"] = [b_pos, a_pos]
+        out.append(change)
+    return out
+
+
+def journal_entry(argv, changes, source="store", when=None):
+    """One mutation, ready to append.
+
+    `argv` is stored RAW, not prettified. The literal command is the forensic artifact — a
+    rendered description reflects what the code believed it was doing, which is precisely the
+    thing under suspicion when someone reads the journal.
+    """
+    return {"contract": JOURNAL_CONTRACT, "at": _journal_stamp(when),
+            "source": source, "argv": list(argv or []), "changes": changes}
+
+
+def append_journal(entry, path=None, store=None):
+    """Append ONE line, and never raise.
+
+    O_APPEND (plus a single small os.write) so two concurrent writers interleave whole lines
+    instead of overwriting each other's offsets — the same reason the store uses os.replace.
+    Failure returns None: recording a mutation must not be able to fail the mutation, which is
+    the contract _backup_before_write already established for the insurance layers.
+    """
+    try:
+        path = path or journal_path(store)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        line = json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.write(fd, line.encode("utf-8"))
+        finally:
+            os.close(fd)
+        return path
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _journal_save(argv, before, after, source, store_for_path):
+    """Journal one save, if it changed anything. A no-op write earns no entry, for the same
+    reason it earns no snapshot: noise costs the reader more than the empty record informs.
+
+    The never-raise contract is enforced HERE, at the boundary save_store calls, not merely
+    inside append_journal. Depending on the inner function to stay polite means any future
+    change to it (or to diff_items) could start failing real mutations, and losing a waypoint
+    to protect a record of that waypoint is the wrong trade in every case.
+    """
+    try:
+        changes = diff_items(before, after)
+        if not changes:
+            return None
+        if argv is None:
+            argv = sys.argv[1:]
+        return append_journal(journal_entry(argv, changes, source), store=store_for_path)
+    except Exception:
+        return None
+
+
+def read_journal(path=None, item_id=None, since=None, store=None):
+    """Entries oldest-first, optionally filtered by item id and by `since` (a YYYY-MM-DD date
+    or a full stamp; compared as strings, which the ISO layout makes correct).
+
+    A malformed line is SKIPPED, mirroring load_store's fail-safe. Every mutation appends here,
+    so a crash mid-append or a full disk can leave a partial tail; degrading to "one entry
+    missing" keeps the other thousand readable, whereas a parse error on the whole file would
+    lose the history exactly when someone finally needed it.
+    """
+    path = path or journal_path(store)
+    out = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = list(f)
+    except OSError:
+        return out
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict):
+            continue
+        if since and str(e.get("at") or "") < since:
+            continue
+        if item_id:
+            changes = e.get("changes") or []
+            if not any(isinstance(c, dict) and c.get("id") == item_id for c in changes):
+                continue
+        out.append(e)
+    return out
 
 
 def slugify(title, maxlen=30):

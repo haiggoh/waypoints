@@ -709,3 +709,157 @@ def test_hook_note_teaches_the_archive_verbs_and_the_capped_banner(tmp_path):
     assert "archive list" in ctx                   # the paper trail is discoverable
     assert "--delete --confirm" in ctx             # deletion is named as the user's call
     assert "waypoints.py list" in ctx              # the banner is capped, so list is the full view
+
+
+# ---- the journal, end to end through the CLI (0.5.0) ----
+
+def _journal_file(store):
+    return os.path.splitext(str(store))[0] + "-journal.jsonl"
+
+
+def _jlines(store):
+    """Re-read the journal from DISK, skipping nothing silently: any unparseable line fails the
+    test loudly here, which is the opposite of what the reader does on purpose."""
+    path = _journal_file(store)
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return [json.loads(l) for l in f if l.strip()]
+
+
+def test_every_mutating_command_leaves_a_journal_entry(tmp_path):
+    """The coverage test. Journalling is wired into save_store/save_archive rather than into
+    each subcommand precisely so this can hold for commands nobody thought about."""
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "One"], store, "2026-08-27")
+    _run([CLI, "add", "Two"], store, "2026-08-27")
+    mutations = [
+        ["edit", "one", "--add-point", "a point"],
+        ["priority", "one", "5"],
+        ["reorder", "two", "0"],
+        ["triage", "one", "--tier", "do-now"],
+        ["done", "two"],
+        ["reopen", "two"],
+        ["toggle", "two"],
+        ["prune"],
+        ["rm", "one"],
+    ]
+    for argv in mutations:
+        before = len(_jlines(store))
+        r = _run([CLI] + argv, store, "2026-08-27")
+        assert r.returncode == 0, (argv, r.stderr)
+        after = _jlines(store)
+        assert len(after) > before, "%s left no journal entry" % " ".join(argv)
+        assert after[-1]["argv"][0] == argv[0]
+
+
+def test_journal_records_the_before_and_after_of_the_touched_item(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Fix the thing"], store, "2026-08-27")
+    _run([CLI, "done", "fix-the-thing", "--as", "Fixed the thing"], store, "2026-08-27")
+    entry = _jlines(store)[-1]
+    change = [ch for ch in entry["changes"] if ch["id"] == "fix-the-thing"][0]
+    assert change["before"]["done"] is False and change["before"]["title"] == "Fix the thing"
+    assert change["after"]["done"] is True and change["after"]["title"] == "Fixed the thing"
+
+
+def test_journal_records_argv_not_a_rendered_description(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Some title", "--point", "a bullet"], store, "2026-08-27")
+    assert _jlines(store)[-1]["argv"] == ["add", "Some title", "--point", "a bullet"]
+
+
+def test_rm_journals_the_move_as_removal_plus_archive_addition(tmp_path):
+    # Two entries, two sources: this is how a MOVE is distinguished from a LOSS after the fact.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Stray"], store, "2026-08-27")
+    _run([CLI, "rm", "stray"], store, "2026-08-27")
+    tail = _jlines(store)[-2:]
+    assert [e["source"] for e in tail] == ["store", "archive"]
+    assert tail[0]["changes"][0]["after"] is None       # left the live store
+    assert tail[1]["changes"][0]["before"] is None      # arrived in the archive
+
+
+def test_permanent_deletion_is_itself_journalled(tmp_path):
+    """The one destructive path must be the best-recorded one: after a real delete the item is
+    gone from every store, so the journal holds the only copy of what it said."""
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Doomed", "--point", "why it existed"], store, "2026-08-27")
+    _run([CLI, "rm", "doomed"], store, "2026-08-27")
+    _run([CLI, "rm", "doomed", "--delete", "--confirm"], store, "2026-08-27")
+    assert _ids(_archive_file(store)) == [] and _ids(store) == []
+    gone = [e for e in _jlines(store) if "--delete" in (e.get("argv") or [])]
+    assert len(gone) == 1
+    recovered = gone[0]["changes"][0]["before"]
+    assert recovered["title"] == "Doomed" and recovered["summary"] == ["why it existed"]
+
+
+def test_cli_journal_reads_back_the_history(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Readable"], store, "2026-08-27")
+    r = _run([CLI, "journal"], store, "2026-08-27")
+    assert r.returncode == 0
+    assert "add Readable" in r.stdout and "+ readable: added" in r.stdout
+
+
+def test_cli_journal_filters_by_id(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Alpha"], store, "2026-08-27")
+    _run([CLI, "add", "Beta"], store, "2026-08-27")
+    r = _run([CLI, "journal", "--id", "beta"], store, "2026-08-27")
+    assert "Beta" in r.stdout and "Alpha" not in r.stdout
+
+
+def test_cli_journal_filters_by_since(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Old news"], store, "2026-08-01")
+    _run([CLI, "add", "Fresh"], store, "2026-08-27")
+    r = _run([CLI, "journal", "--since", "2026-08-27"], store, "2026-08-27")
+    assert "Fresh" in r.stdout and "Old news" not in r.stdout
+
+
+def test_cli_journal_names_the_field_that_changed(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Thing"], store, "2026-08-27")
+    _run([CLI, "priority", "thing", "3"], store, "2026-08-27")
+    r = _run([CLI, "journal", "--id", "thing"], store, "2026-08-27")
+    assert "~ thing: priority" in r.stdout
+
+
+def test_cli_journal_on_an_empty_history_explains_itself(tmp_path):
+    store = tmp_path / "s.json"
+    r = _run([CLI, "journal"], store, "2026-08-27")
+    assert r.returncode == 0 and "no journal yet" in r.stdout
+
+
+def test_cli_journal_survives_a_corrupt_line(tmp_path):
+    # Reading history is exactly when a truncated tail must not be fatal.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Survivor"], store, "2026-08-27")
+    with open(_journal_file(store), "a") as f:
+        f.write("{ truncated\n")
+    r = _run([CLI, "journal"], store, "2026-08-27")
+    assert r.returncode == 0 and "Survivor" in r.stdout
+
+
+def test_journal_is_reachable_by_the_env_var_that_moves_the_store(tmp_path):
+    # If $WAYPOINTS_FILE did not redirect the journal too, a test would append to the real one.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Contained"], store, "2026-08-27")
+    assert os.path.exists(_journal_file(store))
+    assert not os.path.exists(os.path.expanduser("~/.claude/s-journal.jsonl"))
+
+
+def test_journal_survives_the_backup_ring_evicting_snapshots(tmp_path):
+    """The whole point of 0.5.0: snapshots may be evicted, history may not. Writes enough to
+    overflow the (now smaller) ring, then asserts the oldest state is still recoverable from
+    the journal even though its snapshot is gone."""
+    import waypoints_core as core
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Original title"], store, "2026-08-27")
+    for n in range(core.BACKUP_KEEP_RECENT + 5):
+        _run([CLI, "edit", "original-title", "--title", "Rewrite %d" % n], store, "2026-08-27")
+    snaps = os.listdir(os.path.splitext(str(store))[0] + "-backups")
+    assert len(snaps) <= core.BACKUP_KEEP_RECENT + 1        # ring bounded (+ the day baseline)
+    first = [e for e in _jlines(store) if e["changes"][0]["before"] is None][0]
+    assert first["changes"][0]["after"]["title"] == "Original title"

@@ -90,6 +90,10 @@ waypoints.py rm <id>                    # remove ONE item from the live store, i
 waypoints.py restore <id>               # archive -> live store, still done
 waypoints.py archive list [--json]      # the closed-item paper trail
 waypoints.py archive show <id>          # an archived item's full record
+waypoints.py journal [--id <id>] [--since YYYY-MM-DD]
+#   The append-only mutation history: which command changed what, when, with the before/after of
+#   each item it touched. Never pruned. Use it INSTEAD OF speculating when something looks wrong —
+#   "when did this lose its bullets" is a lookup, not a guess.
 waypoints.py rm <id> --delete --confirm # PERMANENT deletion. Archive-only, both flags required,
 #   one exact id. Refuses with exit 2 if either flag is missing or the item is still live.
 ```
@@ -97,6 +101,11 @@ Item lifecycle: `open` → `done` (live, out of the banner) → `archived` (sepa
 restorable) → `deleted` (gone). The closed trail is how the user reconstructs where an error slipped
 in, so **nothing routine destroys it** — and `reopen <id>` auto-restores from the archive in one
 step, so a premature close is always recoverable. Prefer `rm` over hand-editing the store file.
+
+Three records, three jobs — do not substitute one for another: `journal` = every mutation, permanent
+(*where did this go wrong*); `archive list` = closed items, human-readable (*how did this resolve*);
+`~/.claude/waypoints-backups/` = a bounded ring of whole-file snapshots (*put it back*). The ring is
+deliberately small **because** the journal is permanent.
 Prefer **`edit`** to fix or enrich an existing item — it keeps the `id` and `created`. Never
 `done`+re-`add` to "update" (that regenerates the id, drops `created`, and leaves a false ✓). When
 picking an item back up, `show <id>` to read its full `detail` (the banner only carries title +

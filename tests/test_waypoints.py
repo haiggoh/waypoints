@@ -964,3 +964,185 @@ def test_banner_probes_the_machine_when_no_hint_is_given(tmp_path, monkeypatch):
     (tmp_path / "plugins" / "installed_plugins.json").write_text(
         json.dumps({"version": 2, "plugins": {}}))
     assert "/ungate-queue" not in _flat(c.format_banner(_with_gated()))
+
+
+# ---- the journal (0.5.0): append-only history ----
+#
+# The bar these hold: an entry must exist for EVERY mutation (a history with holes reads as
+# complete and is worse than none), a bad line must not cost the rest of the file, and a
+# journal failure must not fail the mutation it was recording.
+
+def _jstore(tmp_path, monkeypatch, items=None):
+    """Point the whole file family (store/archive/journal/backups) at tmp_path."""
+    store = tmp_path / "s.json"
+    monkeypatch.setenv("WAYPOINTS_FILE", str(store))
+    c.save_store({"version": c.VERSION, "items": items or []}, argv=["setup"])
+    return store
+
+
+def test_journal_path_is_derived_from_the_store():
+    # One env var must redirect the whole family, or a test writes history into the real journal.
+    assert c.journal_path("/tmp/x/w.json") == "/tmp/x/w-journal.jsonl"
+
+
+def test_diff_reports_an_added_item():
+    ch = c.diff_items([], [{"id": "a", "title": "A"}])
+    assert ch == [{"id": "a", "before": None, "after": {"id": "a", "title": "A"}}]
+
+
+def test_diff_reports_a_removed_item():
+    ch = c.diff_items([{"id": "a", "title": "A"}], [])
+    assert len(ch) == 1 and ch[0]["after"] is None and ch[0]["before"]["id"] == "a"
+
+
+def test_diff_reports_a_field_change_with_both_sides():
+    ch = c.diff_items([{"id": "a", "done": False}], [{"id": "a", "done": True}])
+    assert ch[0]["before"]["done"] is False and ch[0]["after"]["done"] is True
+
+
+def test_diff_is_silent_when_nothing_changed():
+    same = [{"id": "a", "title": "A"}]
+    assert c.diff_items(same, list(same)) == []
+
+
+def test_diff_catches_a_pure_reorder():
+    # `reorder` changes no field, so a field-only differ would leave the command unrecorded.
+    a, b = {"id": "a"}, {"id": "b"}
+    ch = c.diff_items([a, b], [b, a])
+    moved = {x["id"]: x.get("moved") for x in ch}
+    assert moved == {"a": [0, 1], "b": [1, 0]}
+
+
+def test_journal_entry_records_argv_verbatim():
+    # Raw argv, not a rendered description: the literal command is the forensic artifact.
+    e = c.journal_entry(["done", "some-id", "--as", "fixed it"], [], when="2026-08-27T10:00:00")
+    assert e["argv"] == ["done", "some-id", "--as", "fixed it"]
+    assert e["contract"] == c.JOURNAL_CONTRACT and e["at"] == "2026-08-27T10:00:00"
+
+
+def test_journal_stamp_dates_from_today_so_the_clock_is_fakeable(monkeypatch):
+    monkeypatch.setenv("WAYPOINTS_TODAY", "2020-01-02")
+    assert c._journal_stamp().startswith("2020-01-02T")
+
+
+def test_append_journal_appends_and_never_truncates(tmp_path):
+    j = tmp_path / "j.jsonl"
+    for n in range(3):
+        c.append_journal(c.journal_entry(["cmd%d" % n], []), path=str(j))
+    assert len(c.read_journal(path=str(j))) == 3
+
+
+def test_journal_file_is_owner_only(tmp_path):
+    j = tmp_path / "j.jsonl"
+    c.append_journal(c.journal_entry(["x"], []), path=str(j))
+    assert oct(os.stat(str(j)).st_mode & 0o777) == "0o600"
+
+
+def test_read_journal_skips_a_corrupt_line_and_keeps_the_rest(tmp_path):
+    # A crash mid-append leaves a partial tail; it must cost one entry, not the history.
+    j = tmp_path / "j.jsonl"
+    c.append_journal(c.journal_entry(["good-1"], []), path=str(j))
+    with open(str(j), "a") as f:
+        f.write('{"argv": ["truncated"\n')
+        f.write("not json at all\n")
+        f.write("\n")
+    c.append_journal(c.journal_entry(["good-2"], []), path=str(j))
+    got = [e["argv"][0] for e in c.read_journal(path=str(j))]
+    assert got == ["good-1", "good-2"]
+
+
+def test_read_journal_of_a_missing_file_is_empty_not_an_error(tmp_path):
+    assert c.read_journal(path=str(tmp_path / "absent.jsonl")) == []
+
+
+def test_read_journal_filters_by_item_id(tmp_path):
+    j = tmp_path / "j.jsonl"
+    c.append_journal(c.journal_entry(["a"], [{"id": "one", "before": None, "after": {}}]), path=str(j))
+    c.append_journal(c.journal_entry(["b"], [{"id": "two", "before": None, "after": {}}]), path=str(j))
+    got = [e["argv"][0] for e in c.read_journal(path=str(j), item_id="two")]
+    assert got == ["b"]
+
+
+def test_read_journal_filters_by_since_date(tmp_path):
+    j = tmp_path / "j.jsonl"
+    c.append_journal(c.journal_entry(["old"], [], when="2026-08-01T09:00:00"), path=str(j))
+    c.append_journal(c.journal_entry(["new"], [], when="2026-08-27T09:00:00"), path=str(j))
+    got = [e["argv"][0] for e in c.read_journal(path=str(j), since="2026-08-27")]
+    assert got == ["new"]
+
+
+def test_since_boundary_includes_the_whole_named_day(tmp_path):
+    # "--since 2026-08-27" must not silently drop that day's own entries.
+    j = tmp_path / "j.jsonl"
+    c.append_journal(c.journal_entry(["midnight"], [], when="2026-08-27T00:00:00"), path=str(j))
+    assert len(c.read_journal(path=str(j), since="2026-08-27")) == 1
+
+
+def test_save_store_journals_the_change(tmp_path, monkeypatch):
+    store = _jstore(tmp_path, monkeypatch)
+    items = [{"id": "a", "title": "A"}]
+    c.save_store({"version": c.VERSION, "items": items}, argv=["add", "A"])
+    entries = c.read_journal(item_id="a")
+    assert len(entries) == 1 and entries[0]["argv"] == ["add", "A"]
+    assert entries[0]["source"] == "store"
+
+
+def test_save_archive_journals_under_its_own_source(tmp_path, monkeypatch):
+    # Tagging the source is what lets a MOVE (store-remove + archive-add) be told from a LOSS.
+    _jstore(tmp_path, monkeypatch)
+    c.save_archive({"version": c.VERSION, "items": [{"id": "a", "title": "A"}]}, argv=["prune"])
+    entries = c.read_journal(item_id="a")
+    assert [e["source"] for e in entries] == ["archive"]
+
+
+def test_store_and_archive_share_one_journal(tmp_path, monkeypatch):
+    # One file, so a move reads in order instead of being split across two histories.
+    _jstore(tmp_path, monkeypatch)
+    c.save_store({"version": c.VERSION, "items": [{"id": "a"}]}, argv=["add"])
+    c.save_archive({"version": c.VERSION, "items": [{"id": "a"}]}, argv=["prune"])
+    assert len(c.read_journal()) == 2
+
+
+def test_a_no_op_save_earns_no_journal_entry(tmp_path, monkeypatch):
+    store = _jstore(tmp_path, monkeypatch, [{"id": "a", "title": "A"}])
+    before = len(c.read_journal())
+    c.save_store({"version": c.VERSION, "items": [{"id": "a", "title": "A"}]}, argv=["edit"])
+    assert len(c.read_journal()) == before
+
+
+def test_save_store_defaults_argv_to_the_process_argv(tmp_path, monkeypatch):
+    # No call site should have to remember to pass argv, or the next one will not.
+    _jstore(tmp_path, monkeypatch)
+    monkeypatch.setattr(c.sys, "argv", ["waypoints.py", "done", "some-id"])
+    c.save_store({"version": c.VERSION, "items": [{"id": "z"}]})
+    assert c.read_journal(item_id="z")[0]["argv"] == ["done", "some-id"]
+
+
+def test_a_failing_journal_does_not_wedge_the_write(tmp_path, monkeypatch):
+    # Insurance must not be able to break the thing it insures.
+    store = _jstore(tmp_path, monkeypatch)
+    monkeypatch.setattr(c, "append_journal", lambda *a, **k: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(OSError):
+        c.append_journal({}, path="x")          # the fake really does raise
+    c.save_store({"version": c.VERSION, "items": [{"id": "survivor"}]}, argv=["add"])
+    assert [i["id"] for i in c.load_store()["items"]] == ["survivor"]
+
+
+def test_append_journal_swallows_its_own_io_errors(tmp_path):
+    # The real function, not a stub: an unwritable path must return None rather than raise.
+    assert c.append_journal(c.journal_entry(["x"], []),
+                            path=str(tmp_path / "nodir" / "sub" / "\x00bad.jsonl")) is None
+
+
+def test_journal_is_never_pruned_by_the_backup_retention(tmp_path, monkeypatch):
+    # The ring is bounded BECAUSE the journal is not; retention reaching it would undo that.
+    store = _jstore(tmp_path, monkeypatch)
+    for n in range(c.BACKUP_KEEP_RECENT + 12):
+        c.save_store({"version": c.VERSION, "items": [{"id": "a", "n": n}]}, argv=["edit", str(n)])
+    kept = len(c.read_journal())
+    assert kept >= c.BACKUP_KEEP_RECENT + 12
+    assert os.path.exists(c.journal_path())
+
+
+def test_the_ring_is_ten_now_that_history_lives_in_the_journal():
+    assert c.BACKUP_KEEP_RECENT == 10

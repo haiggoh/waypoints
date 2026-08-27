@@ -74,10 +74,50 @@ belongs nowhere near it.
 **Every write is backed up first.** Before overwriting the store or the archive, the current file is
 copied (never moved) into `~/.claude/waypoints-backups/`. Atomic writes already survive a crash;
 these snapshots additionally survive a *correct-but-mistaken* command, which is the difference
-between irreversible and recoverable. Retention keeps the last 20 snapshots plus the first of each
+between irreversible and recoverable. Retention keeps the last 10 snapshots plus the first of each
 of the last 30 days — the daily tier is what stops one busy wrap-up from evicting the state the day
 began in. Retention only ever deletes files it created itself (strict name matching), so hand-made
 backups sitting nearby are never touched.
+
+## The journal
+
+Three records with three different jobs. Reach for the right one:
+
+| | answers | kept |
+|---|---|---|
+| `journal` | *which command changed what, when* | append-only, **never pruned** |
+| `archive list` | *how did this item resolve* | until you explicitly delete it |
+| `waypoints-backups/` | *put the whole file back* | bounded ring (10 + 30 dailies) |
+
+```
+waypoints.py journal                        # the whole history
+waypoints.py journal --id some-waypoint     # one item's life story
+waypoints.py journal --since 2026-08-01     # from a date (or a full ISO stamp)
+```
+
+`~/.claude/waypoints-journal.jsonl` gets **one line per mutation**: the ISO timestamp, the raw
+`argv`, and the before/after of each item that actually changed. Raw argv because the literal
+command is the forensic artifact — a prettified description reflects what the code *believed* it was
+doing, which is the very thing in question when you are reading back through history.
+
+An entry costs from ~0.5 KB for a terse item up to a few KB for one with a long `detail` (which is
+stored twice — before *and* after), against ~200 KB for a full-store snapshot of a busy store. So
+between one and two orders of magnitude cheaper, and that ratio is the whole design: the journal can
+afford to be permanent, which is what frees the snapshot ring to be small. Store + journal replayed
+backwards reconstructs any earlier state, including one whose snapshot has long since aged out.
+
+Two properties worth knowing:
+
+- **It cannot cost you a waypoint.** Recording is wrapped so a failure to journal (full disk,
+  read-only home) returns quietly and the mutation still lands. Insurance must never break the
+  thing it insures.
+- **A corrupt line costs one entry, not the file.** Every mutation appends here, so a crash
+  mid-write can leave a partial tail; unparseable lines are skipped on read. Reading history is
+  exactly when a truncated tail must not be fatal.
+
+Journalling is wired into the two save functions, not into each subcommand — so a command nobody
+thought about is still recorded. Permanent deletion is journalled too, which means the journal ends
+up holding the only surviving copy of a deleted item.
 
 ## Banner size
 
@@ -152,6 +192,19 @@ independently of the store, so the on-disk shape stays free to change:
                "surface_on": null, "done": false, "priority": 0, "surfaceable": true,
                "tier": null, "gate_reason": null } ] }
 ```
+
+The journal is machine-readable by construction — one JSON object per line, each carrying its own
+`"contract"` — so a consumer reads it directly rather than through a flag:
+
+```json
+{"argv": ["done", "some-id"], "at": "2026-08-27T13:53:37", "contract": 1, "source": "store",
+ "changes": [{"id": "some-id", "before": {"done": false, "…": "…"},
+                                "after": {"done": true, "…": "…"}}]}
+```
+
+`source` is `"store"` or `"archive"`, which is how a **move** (one line leaving the store, one
+arriving in the archive) is told apart from a **loss**. A change with `"before": null` is an
+addition, `"after": null` a removal, and `"moved": [from, to]` a pure reordering.
 
 `tier`/`gate_reason` are always present here and `null` when unset, so a consumer never has to tell
 a missing key from a null one. `gated + actionable + untriaged == open` — check it and you know

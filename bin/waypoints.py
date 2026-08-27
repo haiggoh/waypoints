@@ -19,6 +19,9 @@
                                          # --delete --confirm = the obscure two-step, archive-only
     waypoints archive list               # the closed-item paper trail
     waypoints archive show <id>          # full record of an archived item
+    waypoints journal [--id <id>] [--since YYYY-MM-DD]
+                                         # the mutation history: which command changed what,
+                                         # when. Append-only and never pruned
     waypoints toggle <id>                # flip an item's done state
     waypoints priority <id> <level>      # set banner priority (int; higher shows earlier)
     waypoints reorder <id> <position>    # move an item to a 0-based position in the list
@@ -32,7 +35,13 @@ runs routinely destroys it.
 Tiers: `title` (banner headline) + `summary` (short bullets, shown in banner via --point) +
 `detail` (full continuity dump, NOT in the banner — read on demand with `show`).
 
-Store path: ~/.claude/waypoints.json (override with $WAYPOINTS_FILE).
+Three records, three jobs — do not reach for the wrong one:
+  `journal`      every mutation, permanent. Answers "where did this go wrong".
+  `archive list` closed items, human-readable. Answers "how did this resolve".
+  the backup dir a bounded ring of whole-file snapshots. Answers "put it back".
+
+Store path: ~/.claude/waypoints.json (override with $WAYPOINTS_FILE); the archive, the journal
+and the backup dir are all derived from it, so one env var redirects the whole family.
 """
 import argparse
 import json
@@ -41,6 +50,25 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import waypoints_core as c
+
+
+def _journal_change_line(ch):
+    """One change, as a line. Shows WHICH FIELDS moved rather than dumping both item dicts —
+    the raw before/after stay in the file for a reader that wants them, but an unsummarised
+    dump per change makes the common case (scan for the command that broke something)
+    unreadable, which would defeat the point of having the record."""
+    item_id = ch.get("id")
+    was, now = ch.get("before"), ch.get("after")
+    if was is None and now is not None:
+        return f"+ {item_id}: added"
+    if now is None and was is not None:
+        return f"- {item_id}: removed"
+    if ch.get("moved"):
+        a, b = ch["moved"]
+        return f"~ {item_id}: moved {a} -> {b}"
+    fields = sorted(set(was or {}) | set(now or {}))
+    changed = [f for f in fields if (was or {}).get(f) != (now or {}).get(f)]
+    return f"~ {item_id}: {', '.join(changed) or 'no field change'}"
 
 
 def main(argv=None):
@@ -136,6 +164,11 @@ def main(argv=None):
                     help="what this item is waiting on (only valid with --tier gated)")
     pv.add_argument("--clear", action="store_true",
                     help="remove the verdict entirely, back to untriaged")
+
+    pj = sub.add_parser("journal", help="the append-only mutation history (which command changed what)")
+    pj.add_argument("--id", default=None, help="only entries that touched this item id")
+    pj.add_argument("--since", default=None,
+                    help="only entries at or after this YYYY-MM-DD (or a full ISO stamp)")
 
     sub.add_parser("prune", help="move all done items to the archive (nothing is destroyed)")
     args = p.parse_args(argv)
@@ -482,6 +515,25 @@ def main(argv=None):
             # the state change is visible rather than inferred.
             print(f"  note: it was OPEN — archiving marked it done. "
                   f"`reopen {args.id}` puts it back in the queue in one step.")
+        return 0
+
+    if args.cmd == "journal":
+        entries = c.read_journal(item_id=args.id, since=args.since)
+        if not entries:
+            where = c.journal_path()
+            if not os.path.exists(where):
+                print(f"(no journal yet at {where} — it starts at the next change)")
+            else:
+                print("(no journal entries match)")
+            return 0
+        for e in entries:
+            argv = " ".join(e.get("argv") or []) or "(no argv recorded)"
+            src_tag = "" if e.get("source") == "store" else f" [{e.get('source')}]"
+            print(f"  {e.get('at')}{src_tag}  waypoints {argv}")
+            for ch in e.get("changes") or []:
+                print(f"      {_journal_change_line(ch)}")
+        plural = "entry" if len(entries) == 1 else "entries"
+        print(f"\n  {len(entries)} {plural} in {c.journal_path()}")
         return 0
 
     if args.cmd == "archive":
