@@ -12,11 +12,22 @@
     waypoints show <id>                  # print title + summary + full detail (the "pick it up" view)
     waypoints done <id> [--as "resolution"]  # mark done; --as rewrites the title to the outcome
                                              # (use it when the title reads as an open question)
-    waypoints reopen <id>                # undo done (inverse of `done`)
+    waypoints reopen <id>                # undo done (inverse of `done`); AUTO-RESTORES an
+                                         # archived item first — no separate `restore` needed
+    waypoints restore <id>               # bring an archived item back to the live store (still done)
+    waypoints rm <id>                    # remove an item from the LIVE store, archiving it (recoverable)
+                                         # --delete --confirm = the obscure two-step, archive-only
+    waypoints archive list               # the closed-item paper trail
+    waypoints archive show <id>          # full record of an archived item
     waypoints toggle <id>                # flip an item's done state
     waypoints priority <id> <level>      # set banner priority (int; higher shows earlier)
     waypoints reorder <id> <position>    # move an item to a 0-based position in the list
-    waypoints prune                      # drop all done items
+    waypoints prune                      # MOVE all done items to the archive (nothing is destroyed)
+
+Item lifecycle: open -> done (live store, hidden from the banner) -> archived (a separate file,
+still readable/restorable) -> deleted (gone; only via rm --delete --confirm, from the archive,
+by exact id). The closed trail is a deliberate record of how things resolved, so nothing that
+runs routinely destroys it.
 
 Tiers: `title` (banner headline) + `summary` (short bullets, shown in banner via --point) +
 `detail` (full continuity dump, NOT in the banner — read on demand with `show`).
@@ -87,6 +98,25 @@ def main(argv=None):
     pr = sub.add_parser("reopen", help="undo done on an item by id (inverse of `done`)")
     pr.add_argument("id")
 
+    pres = sub.add_parser("restore", help="bring an archived item back to the live store (stays done)")
+    pres.add_argument("id")
+
+    prm = sub.add_parser("rm", help="remove an item from the live store, archiving it (recoverable)")
+    prm.add_argument("id")
+    prm.add_argument("--delete", action="store_true",
+                     help="permanent deletion — only valid for an item that is ALREADY archived "
+                          "(never removes from the live store)")
+    prm.add_argument("--confirm", action="store_true",
+                     help="required together with --delete to actually delete (fail-closed without it)")
+
+    parc = sub.add_parser("archive", help="read the archived (closed) item trail")
+    parc_sub = parc.add_subparsers(dest="archive_cmd", required=True)
+    parl = parc_sub.add_parser("list", help="list archived items")
+    parl.add_argument("--json", action="store_true",
+                      help="emit the documented machine-readable contract instead of text")
+    parsh = parc_sub.add_parser("show", help="print an archived item's full record")
+    parsh.add_argument("id")
+
     pt = sub.add_parser("toggle", help="flip an item's done state")
     pt.add_argument("id")
 
@@ -107,7 +137,7 @@ def main(argv=None):
     pv.add_argument("--clear", action="store_true",
                     help="remove the verdict entirely, back to untriaged")
 
-    sub.add_parser("prune", help="remove done items")
+    sub.add_parser("prune", help="move all done items to the archive (nothing is destroyed)")
     args = p.parse_args(argv)
 
     store = c.load_store()
@@ -261,10 +291,60 @@ def main(argv=None):
         return 0
 
     if args.cmd == "reopen":
-        ok = c.reopen_item(items, args.id)
+        # Multi-store: the live store wins (an id that exists in both is a live item, even a
+        # done one — prefer it and name the archived namesake rather than silently picking).
+        live = c.get_item(items, args.id)
+        arch = c.load_archive()
+        archived = c.get_item(arch["items"], args.id)
+        if live is not None:
+            if live.get("done"):
+                c.reopen_item(items, args.id)
+                c.save_store(store)
+            if archived is not None:
+                print(
+                    f"note: an archived item with the same id exists "
+                    f"(archived {archived.get('archived_at') or 'unknown'}) — "
+                    f"the live copy was the one reopened",
+                    file=sys.stderr)
+            print(f"reopened: {args.id}")
+            return 0
+        if archived is not None:
+            # Auto-restore + reopen in one step: it would otherwise be stranded, still done,
+            # out of the banner — exactly the trap that 0.3.0's destroy-on-prune created.
+            if args.id in [i["id"] for i in items]:
+                items.append(archived)
+            else:
+                items.insert(0, archived)  # fresh id -> top of the queue
+            archived["done"] = False
+            archived["restored_at"] = c.today()
+            # archived_at is KEPT: it is the trail's record of when this closed, and a restore
+            # should add a fact, not erase one. `restored_at` alone says where it is now.
+            arch["items"] = [i for i in arch["items"] if i["id"] != args.id]
+            c.save_store(store)
+            c.save_archive(arch)
+            print(f"restored from archive and reopened: {args.id}")
+            return 0
+        print("no such id: not in the live store or the archive")
+        return 1
+
+    if args.cmd == "restore":
+        arch = c.load_archive()
+        aitem = c.get_item(arch["items"], args.id)
+        if aitem is None:
+            print(f"no such id in the archive: {args.id}")
+            return 1
+        if args.id in [i["id"] for i in items]:
+            print(f"refusing: {args.id} is already in the live store — use `edit`/`reopen` on it")
+            return 2
+        # Back as DONE — restore is a move, not a re-open; `reopen` is the one-step form.
+        # archived_at is KEPT for the same reason as in `reopen`: it records when the item closed.
+        aitem["restored_at"] = c.today()
+        arch["items"] = [i for i in arch["items"] if i["id"] != args.id]
+        items.insert(0, aitem)
         c.save_store(store)
-        print(f"reopened: {args.id}" if ok else f"no such id: {args.id}")
-        return 0 if ok else 1
+        c.save_archive(arch)
+        print(f"restored to the live store (still done): {args.id} — `reopen {args.id}` to re-open")
+        return 0
 
     if args.cmd == "toggle":
         new_state = c.toggle_done(items, args.id)
@@ -320,11 +400,128 @@ def main(argv=None):
         return 0
 
     if args.cmd == "prune":
-        before = len(items)
-        store["items"] = c.prune(items)
+        kept, archived_batch = c.prune(items)
+        if not archived_batch:
+            print("no done items to archive")
+            return 0
+        arch = c.load_archive()
+        existing = {i["id"] for i in arch["items"]}
+        for i in archived_batch:
+            if i["id"] not in existing:  # re-prune of the same done item: idempotent no-op
+                arch["items"].append(i)
+        store["items"] = kept
         c.save_store(store)
-        print(f"pruned {before - len(store['items'])} done item(s)")
+        c.save_archive(arch)
+        print(
+            f"archived {len(archived_batch)} done item(s) to {c.archive_path()} "
+            f"(nothing was destroyed: `reopen <id>` restores; `archive list` shows the trail; "
+            f"`rm <id> --delete --confirm` is the only path to permanent deletion)")
         return 0
+
+    if args.cmd == "rm":
+        live = c.get_item(items, args.id)
+        if args.delete:
+            # The deliberate two-step. Without BOTH flags this refuses — 0.3.0's
+            # --point/--replace-points idiom: no destructive default, exit 2, name the flag.
+            if not args.confirm:
+                print("refusing: permanent deletion requires BOTH --delete AND --confirm.")
+                print(f"  The archive is the paper trail of how things resolved; deleting it is "
+                      f"your call, made deliberately.")
+                print(f"  To really delete:  waypoints.py rm {args.id} --delete --confirm")
+                return 2
+            if live is not None:
+                print(
+                    f"refusing: {args.id} is still in the LIVE store — the two-step deletes "
+                    f"from the ARCHIVE only (its purpose is destroying the paper trail, which a "
+                    f"live item doesn't have yet).")
+                print(f"  Step 1 (archive it):  waypoints.py rm {args.id}"
+                      + ("   [it is OPEN — that step will close it]"
+                         if not live.get("done") else ""))
+                print(f"  Step 2 (destroy it):   waypoints.py rm {args.id} --delete --confirm")
+                return 2
+            arch = c.load_archive()
+            aitem = c.get_item(arch["items"], args.id)
+            if aitem is None:
+                print(f"no such id in the archive: {args.id} — nothing to delete")
+                return 1
+            arch["items"] = [i for i in arch["items"] if i["id"] != args.id]
+            c.save_archive(arch)
+            print(f"permanently deleted from the archive: [{aitem['id']}] {aitem['title']}")
+            return 0
+        # Bare rm = remove from the LIVE store, into the archive (a move, never a destruction).
+        if live is None:
+            arch = c.load_archive()
+            if c.get_item(arch["items"], args.id) is not None:
+                print(
+                    f"{args.id} is not in the live store — it is ARCHIVED "
+                    f"(the paper trail is recoverable: `restore {args.id}` brings it back, "
+                    f"`archive show {args.id}` reads it, `rm {args.id} --delete --confirm` "
+                    f"is the only way to destroy it)")
+            else:
+                print(f"no such id: {args.id} (not in the live store or the archive)")
+            return 2
+        arch = c.load_archive()
+        existing = {i["id"] for i in arch["items"]}
+        if args.id in existing:
+            print(
+                f"refusing: the archive already holds {args.id} — refusing to silently "
+                f"overwrite its closed record (restore the archived copy or delete it with "
+                f"`rm {args.id} --delete --confirm`, then re-rm)")
+            return 2
+        was_open = not live.get("done")
+        live["done"] = True
+        live["archived_at"] = c.today()
+        items.remove(live)
+        arch["items"].append(live)
+        c.save_store(store)
+        c.save_archive(arch)
+        print(f"archived (removed from live, recoverable): [{live['id']}] {live['title']}")
+        if was_open:
+            # rm exists precisely to clear a stray OPEN item (a test probe, a mistake) without a
+            # hand-edit of the store. Say plainly that an open item was closed on the way out, so
+            # the state change is visible rather than inferred.
+            print(f"  note: it was OPEN — archiving marked it done. "
+                  f"`reopen {args.id}` puts it back in the queue in one step.")
+        return 0
+
+    if args.cmd == "archive":
+        arch = c.load_archive()
+        aitems = arch["items"]
+        if args.archive_cmd == "list":
+            if args.json:
+                print(json.dumps(c.archive_payload(aitems), indent=2, ensure_ascii=False))
+                return 0
+            if not aitems:
+                print("(no archived waypoints)")
+                return 0
+            for i in aitems:
+                at = f" (archived {i['archived_at']})" if i.get("archived_at") else ""
+                print(f"  • [{i['id']}] {i['title']}{at}")
+            print(f"\n  {len(aitems)} archived item(s) in {c.archive_path()}")
+            return 0
+        if args.archive_cmd == "show":
+            aitem = c.get_item(aitems, args.id)
+            if aitem is None:
+                print(f"no such id in the archive: {args.id}")
+                return 1
+            print(f"[{aitem['id']}] {aitem['title']}")
+            for point in aitem.get("summary") or []:
+                print(f"  - {point}")
+            if aitem.get("tier"):
+                line = f"verdict: {aitem['tier']}"
+                if aitem.get("gate_reason"):
+                    line += f" — waiting on: {aitem['gate_reason']}"
+                print(f"  {line}")
+            meta = f"created: {aitem.get('created')}"
+            if aitem.get("archived_at"):
+                meta += f"   archived: {aitem['archived_at']}"
+            if aitem.get("restored_at"):
+                meta += f"   restored: {aitem['restored_at']}"
+            print(meta)
+            if aitem.get("detail"):
+                print(f"\n{aitem['detail']}")
+            return 0
+        return 2
     return 2
 
 

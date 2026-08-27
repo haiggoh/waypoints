@@ -42,13 +42,56 @@ waypoints.py reopen adobe-publish   # undo a mistaken done
 waypoints.py toggle adobe-publish   # flip done state in one call
 waypoints.py priority adobe-publish 5   # bump it ahead of others in the banner
 waypoints.py reorder adobe-publish 0    # or move it to an explicit position
-waypoints.py prune
+waypoints.py prune                  # MOVE every done item to the archive (destroys nothing)
+waypoints.py rm adobe-publish       # remove ONE item from the live store, into the archive
+waypoints.py restore adobe-publish  # bring an archived item back (still done)
+waypoints.py archive list           # the closed-item paper trail (--json for the contract)
+waypoints.py archive show adobe-publish
+waypoints.py rm adobe-publish --delete --confirm   # permanent deletion: archive-only, two flags
 waypoints.py triage adobe-publish --tier gated --gate-reason "needs your call on A vs B"
 waypoints.py list --gated               # also --actionable / --untriaged, plus --open
 waypoints.py list --json                # documented machine-readable contract
 ```
 
 The command is `waypoints.py` (Claude Code v2.1.91+ adds the plugin's `bin/` to the Bash-tool PATH).
+
+## Four tiers of record-keeping
+
+```
+open      → shown in the SessionStart banner
+done      → in the live store, hidden from the banner, reopenable
+archived  → moved out to ~/.claude/waypoints-archive.json, still readable, restorable
+deleted   → gone; reachable only from `archived`, only via `rm <id> --delete --confirm`
+```
+
+The closed list is a deliberate **paper trail** — it is how you reconstruct, after the fact, where
+an error slipped in. So nothing that runs routinely destroys it: `prune` and `rm` both *move* items
+to the archive, and permanent deletion takes two explicit flags, works only on an already-archived
+item, and accepts one exact id (no `--all`, no globs). `reopen <id>` auto-restores from the archive
+in a single step, because reopen is the safety net that catches a premature close and friction
+belongs nowhere near it.
+
+**Every write is backed up first.** Before overwriting the store or the archive, the current file is
+copied (never moved) into `~/.claude/waypoints-backups/`. Atomic writes already survive a crash;
+these snapshots additionally survive a *correct-but-mistaken* command, which is the difference
+between irreversible and recoverable. Retention keeps the last 20 snapshots plus the first of each
+of the last 30 days — the daily tier is what stops one busy wrap-up from evicting the state the day
+began in. Retention only ever deletes files it created itself (strict name matching), so hand-made
+backups sitting nearby are never touched.
+
+## Banner size
+
+The banner is injected into **every** session's context, so it is capped: it lists the
+`BANNER_MAX_ITEMS` (default 10) highest-priority items, trims over-long titles to one line, and
+discloses the rest as a count rather than listing them. Nothing is hidden — the header counts all
+open items, the residue is counted explicitly, and `waypoints.py list` shows everything. Tune with
+`$WAYPOINTS_BANNER_MAX_ITEMS` and `$WAYPOINTS_BANNER_TITLE_MAX`.
+
+**No hard dependencies.** When more than a few items are gated, the summary line offers
+`/ungate-queue` — a command from the separate `run-to-completion` plugin — but only after checking
+that it is installed *and* enabled. Without it, the line simply points at this plugin's own
+`/waypoints-gated`. The check fails closed, so waypoints never advertises a command your machine
+does not have.
 
 Each item has **three tiers** so the banner stays tidy without losing context: a short `title`
 (headline), a few `summary` bullets (`--add-point` to append, `--point` to replace the whole list — the latter is refused on an item that already has bullets unless `--replace-points` is given), and a full `detail` dump

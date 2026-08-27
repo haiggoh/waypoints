@@ -70,7 +70,7 @@ def test_cli_add_list_done_prune(tmp_path):
     # done removes it from the hook banner
     _run([CLI, "done", "do-x"], store, "2026-07-12")
     assert _run([HOOK], store, "2026-07-12").stdout.strip() == ""
-    # prune drops the done item
+    # prune MOVES the done item out of the live store (0.4.0: it no longer destroys it)
     _run([CLI, "prune"], store, "2026-07-12")
     assert "(no open waypoints)" in _run([CLI, "list"], store, "2026-07-12").stdout
 
@@ -489,3 +489,223 @@ def test_banner_teaches_add_point_not_bare_point_for_edits(tmp_path):
     ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
     assert "--add-point" in ctx
     assert "--replace-points" in ctx
+
+
+# ---- v0.4.0: archive tier, rm, restore, and the deletion two-step ----
+
+def _archive_file(store):
+    return os.path.splitext(str(store))[0] + "-archive.json"
+
+
+def _read(path):
+    """Re-read state from DISK. The house rule: never verify a state change from the CLI's echo,
+    which can claim success it did not achieve."""
+    if not os.path.exists(path):
+        return {"items": []}
+    with open(path) as f:
+        return json.load(f)
+
+
+def _ids(path):
+    return [i["id"] for i in _read(path)["items"]]
+
+
+def test_prune_archives_rather_than_destroying(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Keep me"], store, "2026-08-27")
+    _run([CLI, "add", "Close me"], store, "2026-08-27")
+    _run([CLI, "done", "close-me"], store, "2026-08-27")
+    _run([CLI, "prune"], store, "2026-08-27")
+    # the item left the live store AND arrived in the archive — asserted on both files
+    assert _ids(store) == ["keep-me"]
+    assert _ids(_archive_file(store)) == ["close-me"]
+    archived = _read(_archive_file(store))["items"][0]
+    assert archived["archived_at"] == "2026-08-27"
+    assert archived["title"] == "Close me"  # the record survives intact, not just the id
+
+
+def test_prune_is_idempotent_and_does_not_duplicate_the_archive(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Close me"], store, "2026-08-27")
+    _run([CLI, "done", "close-me"], store, "2026-08-27")
+    _run([CLI, "prune"], store, "2026-08-27")
+    _run([CLI, "restore", "close-me"], store, "2026-08-27")
+    _run([CLI, "prune"], store, "2026-08-28")
+    assert _ids(_archive_file(store)) == ["close-me"]
+
+
+def test_rm_archives_an_open_item_which_is_why_rm_exists(tmp_path):
+    # The 08-26 case: a stray OPEN test probe had to be cleared by hand-editing the store.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Stray probe"], store, "2026-08-27")
+    r = _run([CLI, "rm", "stray-probe"], store, "2026-08-27")
+    assert r.returncode == 0
+    assert _ids(store) == []
+    assert _ids(_archive_file(store)) == ["stray-probe"]
+    assert "OPEN" in r.stdout  # closing an open item must be stated, not silent
+
+
+def test_rm_delete_without_confirm_refuses_and_changes_nothing(tmp_path):
+    # THE GUARD. Mutation-tested: removing the `if not args.confirm` branch in bin/waypoints.py
+    # must make THIS test fail.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Close me"], store, "2026-08-27")
+    _run([CLI, "done", "close-me"], store, "2026-08-27")
+    _run([CLI, "prune"], store, "2026-08-27")
+    before = _read(_archive_file(store))
+    r = _run([CLI, "rm", "close-me", "--delete"], store, "2026-08-27")
+    assert r.returncode == 2, "a bare --delete must fail closed"
+    assert "refusing" in r.stdout and "--confirm" in r.stdout  # names the flag it needs
+    assert _read(_archive_file(store)) == before, "the archive was modified despite the refusal"
+
+
+def test_rm_delete_confirm_destroys_only_from_the_archive(tmp_path):
+    store = tmp_path / "s.json"
+    for title in ("Close me", "Keep me"):
+        _run([CLI, "add", title], store, "2026-08-27")
+        _run([CLI, "done", title.lower().replace(" ", "-")], store, "2026-08-27")
+    _run([CLI, "prune"], store, "2026-08-27")
+    r = _run([CLI, "rm", "close-me", "--delete", "--confirm"], store, "2026-08-27")
+    assert r.returncode == 0
+    assert _ids(_archive_file(store)) == ["keep-me"], "deleted the wrong item, or too many"
+
+
+def test_rm_delete_refuses_a_live_item_and_prints_the_two_step(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Live one"], store, "2026-08-27")
+    r = _run([CLI, "rm", "live-one", "--delete", "--confirm"], store, "2026-08-27")
+    assert r.returncode == 2
+    assert "LIVE store" in r.stdout
+    assert "Step 1" in r.stdout and "Step 2" in r.stdout
+    assert _ids(store) == ["live-one"], "a refused delete must leave the live store untouched"
+
+
+def test_reopen_auto_restores_from_the_archive_in_one_step(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Premature close"], store, "2026-08-27")
+    _run([CLI, "done", "premature-close"], store, "2026-08-27")
+    _run([CLI, "prune"], store, "2026-08-27")
+    r = _run([CLI, "reopen", "premature-close"], store, "2026-08-28")
+    assert r.returncode == 0
+    assert "restored" in r.stdout.lower()
+    # it moved BACK: present and open in the live store, gone from the archive
+    live = _read(store)["items"]
+    assert [i["id"] for i in live] == ["premature-close"]
+    assert live[0]["done"] is False
+    assert _ids(_archive_file(store)) == []
+    # and the banner surfaces it again — the safety net actually works end to end
+    assert "Premature close" in _run([HOOK], store, "2026-08-28").stdout
+
+
+def test_reopen_and_restore_keep_archived_at(tmp_path):
+    # The trail must carry WHEN it closed; a restore adds a fact, it does not erase one.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Round trip"], store, "2026-08-27")
+    _run([CLI, "done", "round-trip"], store, "2026-08-27")
+    _run([CLI, "prune"], store, "2026-08-27")
+    _run([CLI, "reopen", "round-trip"], store, "2026-08-28")
+    item = _read(store)["items"][0]
+    assert item["archived_at"] == "2026-08-27"
+    assert item["restored_at"] == "2026-08-28"
+
+
+def test_restore_brings_it_back_still_done(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Closed thing"], store, "2026-08-27")
+    _run([CLI, "done", "closed-thing"], store, "2026-08-27")
+    _run([CLI, "prune"], store, "2026-08-27")
+    r = _run([CLI, "restore", "closed-thing"], store, "2026-08-28")
+    assert r.returncode == 0
+    assert _read(store)["items"][0]["done"] is True, "restore is a move, not a reopen"
+    assert _ids(_archive_file(store)) == []
+    assert _run([HOOK], store, "2026-08-28").stdout.strip() == ""  # still out of the banner
+
+
+def test_restore_refuses_when_the_id_is_already_live(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Same name"], store, "2026-08-27")
+    _run([CLI, "done", "same-name"], store, "2026-08-27")
+    _run([CLI, "prune"], store, "2026-08-27")
+    _run([CLI, "add", "Same name"], store, "2026-08-28")  # mints the same slug
+    r = _run([CLI, "restore", "same-name"], store, "2026-08-28")
+    assert r.returncode == 2
+    assert _ids(_archive_file(store)) == ["same-name"], "the archived copy must be left alone"
+
+
+def test_reopen_prefers_the_live_copy_and_warns_about_the_archived_namesake(tmp_path):
+    # ids are slugs, so a new item can mint an id the archive already holds.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Same name"], store, "2026-08-27")
+    _run([CLI, "done", "same-name"], store, "2026-08-27")
+    _run([CLI, "prune"], store, "2026-08-27")
+    _run([CLI, "add", "Same name"], store, "2026-08-28")
+    _run([CLI, "done", "same-name"], store, "2026-08-28")
+    r = _run([CLI, "reopen", "same-name"], store, "2026-08-29")
+    assert r.returncode == 0
+    assert "archived item with the same id" in r.stderr  # named, not silently disambiguated
+    assert _read(store)["items"][0]["done"] is False     # the LIVE copy was reopened
+    assert _ids(_archive_file(store)) == ["same-name"]   # the archived one stayed put
+
+
+def test_archive_list_and_show_read_the_trail(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Trail item", "--point", "a bullet", "--detail", "the long dump"],
+         store, "2026-08-27")
+    _run([CLI, "done", "trail-item"], store, "2026-08-27")
+    _run([CLI, "prune"], store, "2026-08-27")
+    lst = _run([CLI, "archive", "list"], store, "2026-08-28")
+    assert "trail-item" in lst.stdout and "archived 2026-08-27" in lst.stdout
+    show = _run([CLI, "archive", "show", "trail-item"], store, "2026-08-28")
+    assert "a bullet" in show.stdout and "the long dump" in show.stdout
+    assert _run([CLI, "archive", "show", "nope"], store, "2026-08-28").returncode == 1
+
+
+def test_archive_list_json_emits_the_documented_contract(tmp_path):
+    # This path crashed outright in the 0.4.0 draft (archive_payload was never defined), and a
+    # test that only checked the exit code of `archive list` would never have caught it.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Trail item"], store, "2026-08-27")
+    _run([CLI, "done", "trail-item"], store, "2026-08-27")
+    _run([CLI, "prune"], store, "2026-08-27")
+    r = _run([CLI, "archive", "list", "--json"], store, "2026-08-28")
+    assert r.returncode == 0, r.stderr
+    pay = json.loads(r.stdout)
+    assert pay["contract"] == 1
+    assert pay["counts"]["total"] == 1
+    assert pay["items"][0]["id"] == "trail-item"
+    assert pay["items"][0]["archived_at"] == "2026-08-27"
+
+
+def test_every_write_leaves_a_recoverable_snapshot_on_disk(tmp_path):
+    store = tmp_path / "waypoints.json"
+    bdir = tmp_path / "waypoints-backups"
+    _run([CLI, "add", "First"], store, "2026-08-27")
+    _run([CLI, "add", "Second"], store, "2026-08-27")
+    _run([CLI, "add", "Third"], store, "2026-08-27")
+    snaps = sorted(p for p in os.listdir(bdir) if p.startswith("waypoints."))
+    assert len(snaps) >= 2, "writes after the first must be recoverable: %r" % snaps
+    # the oldest snapshot holds the pre-second-add state, i.e. genuinely a prior generation
+    oldest = json.load(open(os.path.join(bdir, snaps[0])))
+    assert [i["id"] for i in oldest["items"]] == ["first"]
+
+
+def test_the_store_survives_its_own_backup_via_the_cli(tmp_path):
+    store = tmp_path / "waypoints.json"
+    _run([CLI, "add", "First"], store, "2026-08-27")
+    _run([CLI, "add", "Second"], store, "2026-08-27")
+    assert store.exists()
+    assert sorted(_ids(store)) == ["first", "second"]
+
+
+def test_hook_note_teaches_the_archive_verbs_and_the_capped_banner(tmp_path):
+    # Agents are the primary users of these commands; a verb absent from the note is a verb no
+    # session discovers. Assert it ships through the HOOK, not by reading the source.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Something open"], store, "2026-08-27")
+    ctx = json.loads(_run([HOOK], store, "2026-08-27").stdout)[
+        "hookSpecificOutput"]["additionalContext"]
+    assert "waypoints.py rm <id>" in ctx           # the per-item removal, over hand-editing
+    assert "ARCHIVES, never deletes" in ctx        # and that it is non-destructive
+    assert "archive list" in ctx                   # the paper trail is discoverable
+    assert "--delete --confirm" in ctx             # deletion is named as the user's call
+    assert "waypoints.py list" in ctx              # the banner is capped, so list is the full view

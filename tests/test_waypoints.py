@@ -1,3 +1,8 @@
+import datetime
+import json
+import os
+import re
+
 import pytest
 
 import waypoints_core as c
@@ -77,11 +82,26 @@ def test_mark_done_sets_flag_and_returns_true():
     assert c.mark_done(items, "nope") is False
 
 
-def test_prune_removes_done():
+def test_prune_moves_done_to_archive_batch():
+    # 0.4.0: prune is a MOVE, not a delete — it returns (kept, archived) and nothing is dropped.
     items = [{"id": "a", "done": False, "title": "A", "surface_on": None},
              {"id": "b", "done": True, "title": "B", "surface_on": None}]
-    kept = c.prune(items)
+    kept, archived = c.prune(items)
     assert [i["id"] for i in kept] == ["a"]
+    assert [i["id"] for i in archived] == ["b"]
+    # every input item is accounted for in exactly one output pile — the property that makes
+    # prune non-destructive, and the one a future refactor would break first
+    assert len(kept) + len(archived) == len(items)
+
+
+def test_prune_stamps_archived_at_so_the_trail_carries_when():
+    items = [{"id": "b", "done": True, "title": "B", "surface_on": None}]
+    os.environ["WAYPOINTS_TODAY"] = "2026-08-27"
+    try:
+        _, archived = c.prune(items)
+    finally:
+        del os.environ["WAYPOINTS_TODAY"]
+    assert archived[0]["archived_at"] == "2026-08-27"
 
 
 # ---- v0.1.3: slug cap, summary tier, edit/get, summary-aware banner ----
@@ -596,3 +616,351 @@ def test_banner_keeps_long_ids_intact():
     out = c.format_banner(items)
     assert "claude-code-transcript-distiller" in out
     assert "outward-facing" in out
+
+
+# ---- v0.4.0: archive tiers, the paper trail, and the backup ring ----
+
+def test_archive_payload_contract_shape():
+    items = [{"id": "a", "title": "A", "summary": ["p"], "done": True,
+              "archived_at": "2026-08-20", "restored_at": "2026-08-25"},
+             {"id": "b", "title": "B", "done": True, "archived_at": "2026-08-21"}]
+    pay = c.archive_payload(items, "2026-08-27")
+    assert pay["contract"] == c.ARCHIVE_CONTRACT
+    assert pay["generated"] == "2026-08-27"
+    assert pay["counts"] == {"total": 2, "restored": 1}
+    # a view never makes a consumer distinguish a missing key from a null one
+    for entry in pay["items"]:
+        for key in ("id", "title", "summary", "detail", "created", "done", "priority",
+                    "tier", "gate_reason", "archived_at", "restored_at"):
+            assert key in entry
+    assert pay["items"][1]["restored_at"] is None
+    # NOT the list contract: surfaceability is meaningless off the live store
+    assert "surfaceable" not in pay["items"][0]
+
+
+def _write_store(path, marker):
+    path.write_text(json.dumps({"version": 1, "items": [{"id": marker}]}) + "\n")
+
+
+def test_backup_is_a_copy_so_the_store_never_vanishes(tmp_path):
+    # A move would unlink the store between backup and rewrite; dying there leaves no store at
+    # the canonical path at all. Assert the source SURVIVES its own backup.
+    store = tmp_path / "waypoints.json"
+    _write_store(store, "one")
+    dst = c._backup_before_write(str(store))
+    assert dst is not None
+    assert store.exists(), "the store must still exist after being backed up"
+    assert json.loads(store.read_text())["items"][0]["id"] == "one"
+    assert json.loads(open(dst).read())["items"][0]["id"] == "one"
+
+
+def test_backups_in_the_same_second_do_not_clobber_each_other(tmp_path):
+    # The 0.4.0-draft bug: second-granularity names collided and the earlier snapshot was
+    # silently overwritten. Freeze the clock to the same second and demand distinct files.
+    store = tmp_path / "waypoints.json"
+    fixed = datetime.datetime(2026, 8, 27, 12, 43, 58)
+
+    class _Clock(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    real = c.datetime.datetime
+    c.datetime.datetime = _Clock
+    try:
+        made = []
+        for marker in ("one", "two", "three"):
+            _write_store(store, marker)
+            made.append(c._backup_before_write(str(store)))
+    finally:
+        c.datetime.datetime = real
+    assert all(made), "every changed write must produce a snapshot"
+    assert len(set(made)) == 3, "same-second snapshots collided: %r" % (made,)
+    # and each one holds its OWN state, not the last writer's
+    got = sorted(json.loads(open(m).read())["items"][0]["id"] for m in made)
+    assert got == ["one", "three", "two"]
+
+
+def test_backup_skipped_when_content_is_identical(tmp_path):
+    # A no-op write must not consume a ring slot — slots are what protect the older states.
+    store = tmp_path / "waypoints.json"
+    _write_store(store, "one")
+    assert c._backup_before_write(str(store)) is not None
+    assert c._backup_before_write(str(store)) is None, "identical content should be skipped"
+    _write_store(store, "two")
+    assert c._backup_before_write(str(store)) is not None
+
+
+def test_retention_never_touches_files_it_did_not_create(tmp_path):
+    # The real ~/.claude holds hand-made neighbours (waypoints.json.bak-reconcile-20260731-...).
+    # A loose glob would delete them. Assert foreign files survive a sweep that deletes ours.
+    store = tmp_path / "waypoints.json"
+    bdir = tmp_path / "waypoints-backups"
+    bdir.mkdir()
+    foreign = [bdir / "waypoints.json.bak-reconcile-20260731-025549",
+               bdir / "hand-made.json",
+               bdir / "waypoints-20260101.json"]  # near-miss: no micros field
+    for f in foreign:
+        f.write_text("{}")
+    for n in range(c.BACKUP_KEEP_RECENT + c.BACKUP_KEEP_DAILY + 12):
+        (bdir / ("waypoints.20260401-000000-%06d.json" % n)).write_text("{}")
+    removed = c._prune_backups(str(bdir), "waypoints")
+    assert removed, "the sweep must actually delete our surplus snapshots"
+    for f in foreign:
+        assert f.exists(), "retention deleted a file it did not create: %s" % f.name
+
+
+def test_retention_keeps_the_ring_bounded_but_spares_day_baselines(tmp_path):
+    bdir = tmp_path / "waypoints-backups"
+    bdir.mkdir()
+    # a burst of same-day writes, big enough to evict everything older on its own
+    for n in range(c.BACKUP_KEEP_RECENT + 15):
+        (bdir / ("waypoints.20260827-120000-%06d.json" % n)).write_text("{}")
+    # plus one baseline per earlier day, which the burst must NOT be able to evict
+    older = ["waypoints.202608%02d-090000-000000.json" % d for d in range(1, 11)]
+    for name in older:
+        (bdir / name).write_text("{}")
+    c._prune_backups(str(bdir), "waypoints")
+    left = {p.name for p in bdir.iterdir()}
+    for name in older:
+        assert name in left, "a burst evicted the day-baseline %s" % name
+    assert len(left) <= c.BACKUP_KEEP_RECENT + c.BACKUP_KEEP_DAILY
+
+
+def test_backups_of_store_and_archive_stay_distinguishable(tmp_path):
+    # Both share one backup dir; without the source stem in the name their histories would be
+    # indistinguishable after the fact, and dedupe could compare a store to an archive snapshot.
+    store = tmp_path / "waypoints.json"
+    arch = tmp_path / "waypoints-archive.json"
+    _write_store(store, "live")
+    _write_store(arch, "closed")
+    a = c._backup_before_write(str(store))
+    b = c._backup_before_write(str(arch), str(store))
+    assert os.path.dirname(a) == os.path.dirname(b), "both rings share one directory"
+    assert os.path.basename(a).startswith("waypoints.")
+    assert os.path.basename(b).startswith("waypoints-archive.")
+    assert c._existing_backups(os.path.dirname(a), "waypoints")[-1][2] == a
+    assert c._existing_backups(os.path.dirname(b), "waypoints-archive")[-1][2] == b
+
+
+def test_backup_failure_never_wedges_the_write(tmp_path, monkeypatch):
+    # The backup is insurance; a full disk must not stop the store from being saved.
+    store = tmp_path / "waypoints.json"
+    _write_store(store, "one")
+    monkeypatch.setattr(c.shutil, "copy2",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    assert c._backup_before_write(str(store)) is None
+    c.save_store({"version": 1, "items": [{"id": "two"}]}, str(store))
+    assert json.loads(store.read_text())["items"][0]["id"] == "two"
+
+
+# ---- v0.4.0: banner is context the user pays for in EVERY session ----
+
+def _flat(text):
+    """Banner text with wrapping collapsed. The banner hard-wraps at BANNER_WIDTH, so a phrase
+    like `waypoints.py list` legitimately spans two lines; assert on meaning, not on line breaks."""
+    return " ".join(text.split())
+
+
+def _many(n, prefix="Item"):
+    return [{"id": "i%d" % k, "title": "%s %d" % (prefix, k), "surface_on": None,
+             "done": False, "created": "2026-08-27"} for k in range(n)]
+
+
+def test_banner_lists_at_most_banner_max_items():
+    items = c.surfaceable(_many(40), "2026-08-27")
+    out = c.format_banner(items)
+    listed = [l for l in out.splitlines() if l.startswith("  • ")]
+    assert len(listed) == c.BANNER_MAX_ITEMS
+
+
+def test_banner_counts_the_unlisted_remainder_rather_than_dropping_it():
+    # Nothing may be silently omitted: the header states the total, the tail states the residue.
+    items = c.surfaceable(_many(40), "2026-08-27")
+    out = c.format_banner(items)
+    assert "40 open waypoint(s)" in out
+    assert "%d more open" % (40 - c.BANNER_MAX_ITEMS) in _flat(out)
+    assert "waypoints.py list" in _flat(out)  # and names how to see them
+
+
+def test_banner_keeps_the_highest_priority_items_when_capped():
+    items = _many(30)
+    items[25]["priority"] = 99
+    items[26]["priority"] = 50
+    out = c.format_banner(c.surfaceable(items, "2026-08-27"))
+    assert "Item 25" in out and "Item 26" in out
+    assert "Item 0" in out          # priority 0, but early in insertion order (stable sort)
+    assert "Item 29" not in out     # the low-priority tail is summarised, not listed
+
+
+def test_banner_does_not_cap_a_short_list():
+    items = c.surfaceable(_many(c.BANNER_MAX_ITEMS), "2026-08-27")
+    out = c.format_banner(items)
+    assert "more open" not in out
+    for k in range(c.BANNER_MAX_ITEMS):
+        assert "Item %d" % k in out
+
+
+def test_banner_trims_long_titles_but_marks_them_as_trimmed():
+    long_title = ("★ NEXT UP: ship the upgrade lifecycle with release discovery and side-by-side "
+                  "venvs plus a seven day rollback window, prefix-cache goal already met")
+    items = _many(6)
+    items[0]["title"] = long_title
+    out = c.format_banner(c.surfaceable(items, "2026-08-27"))
+    assert "…" in out, "an over-long title must read as truncated"
+    assert long_title not in _flat(out)
+    assert "★ NEXT UP: ship the upgrade lifecycle" in _flat(out)  # the head survives
+    assert "titles are trimmed" in _flat(out)                     # and the trim is disclosed
+
+
+def test_banner_keeps_full_titles_when_not_compact():
+    # Below COMPACT_THRESHOLD the banner is already small; trimming there would cost meaning
+    # for no context saving.
+    long_title = "A very long title " * 8
+    items = [{"id": "a", "title": long_title.strip(), "surface_on": None, "done": False}]
+    out = c.format_banner(c.surfaceable(items, "2026-08-27"))
+    assert "…" not in out
+
+
+def test_short_title_trims_on_a_word_boundary():
+    assert c._short_title("alpha beta gamma delta", maxlen=14) == "alpha beta…"
+    assert c._short_title("short", maxlen=14) == "short"
+    assert c._short_title("alpha beta —", maxlen=11) == "alpha beta…"  # trailing dashes stripped
+
+
+def _with_gated(n_open=2, n_gated=None):
+    items = _many(n_open)
+    for k in range((c.GATED_COLLAPSE_THRESHOLD + 1) if n_gated is None else n_gated):
+        items.append({"id": "g%d" % k, "title": "Gated %d" % k, "surface_on": None,
+                      "done": False, "tier": "gated", "gate_reason": "needs sign-off"})
+    return c.surfaceable(items, "2026-08-27")
+
+
+def test_gated_summary_points_at_ungate_queue_and_drops_the_duplicate_invocation():
+    out = c.format_banner(_with_gated(), ungate_hint=True)
+    assert "/waypoints-gated" in _flat(out)
+    assert "/ungate-queue" in _flat(out)
+    assert "list --gated" not in _flat(out), "the duplicate invocation should be gone"
+
+
+def test_capped_banner_still_accounts_for_every_open_item():
+    # The property that makes capping safe: listed + unlisted + gated == the header's total.
+    items = _many(30)
+    for k in range(c.GATED_COLLAPSE_THRESHOLD + 5):
+        items.append({"id": "g%d" % k, "title": "Gated %d" % k, "surface_on": None,
+                      "done": False, "tier": "gated", "gate_reason": "blocked"})
+    surf = c.surfaceable(items, "2026-08-27")
+    out = c.format_banner(surf)
+    listed = len([l for l in out.splitlines() if l.startswith("  • ")])
+    flat = _flat(out)
+    unlisted = int(re.search(r"and (\d+) more open", flat).group(1))
+    gated = int(re.search(r"⛔ (\d+) gated", flat).group(1))
+    total = int(re.search(r"(\d+) open waypoint", flat).group(1))
+    assert listed + unlisted + gated == total == len(surf)
+
+
+def test_backup_stamp_carries_sub_second_precision():
+    """Pinned separately from the collision test, which O_EXCL satisfies on its own.
+
+    A stamp truncated to whole seconds still yields unique FILES (O_EXCL appends -NNN), so the
+    collision test cannot see the difference — this is the assertion that actually holds the
+    microsecond field in place.
+    """
+    when = datetime.datetime(2026, 8, 27, 12, 43, 58, 123456)
+    assert c._backup_stamp(when) == "20260827-124358-123456"
+    # and a stamp one microsecond apart must differ, i.e. precision is not decorative
+    later = datetime.datetime(2026, 8, 27, 12, 43, 58, 123457)
+    assert c._backup_stamp(when) != c._backup_stamp(later)
+
+
+def test_collision_suffixes_sort_chronologically(tmp_path):
+    # "-10" sorts before "-2" unpadded, which would make _existing_backups pick the wrong
+    # "newest" snapshot and so compare the dedupe check against a stale file.
+    bdir = tmp_path / "waypoints-backups"
+    bdir.mkdir()
+    names = []
+    for n in range(12):
+        path, fd = c._unique_backup_path(str(bdir), "waypoints", "20260827-124358-123456")
+        os.close(fd)
+        names.append(os.path.basename(path))
+    ordered = [n for n, _, _ in c._existing_backups(str(bdir), "waypoints")]
+    assert ordered == names, "creation order and sort order diverged: %r" % (ordered,)
+
+
+# ---- v0.4.0: /ungate-queue is a SOFT dependency on another plugin ----
+
+def test_gated_line_omits_ungate_queue_when_the_plugin_is_absent():
+    out = c.format_banner(_with_gated(), ungate_hint=False)
+    assert "/waypoints-gated" in _flat(out)      # our own command always shows
+    assert "/ungate-queue" not in _flat(out)     # the sibling's does not
+    # and the sentence still reads correctly, not as a truncated fragment
+    assert "to see them and why." in _flat(out)
+
+
+def test_gated_line_offers_ungate_queue_when_the_plugin_is_present():
+    out = c.format_banner(_with_gated(), ungate_hint=True)
+    assert "/ungate-queue" in _flat(out)
+    assert "to see them and why, or `/ungate-queue`" in _flat(out)
+
+
+def _fake_claude_dir(tmp_path, registry, settings=None, local=None):
+    (tmp_path / "plugins").mkdir(exist_ok=True)
+    (tmp_path / "plugins" / "installed_plugins.json").write_text(json.dumps(registry))
+    if settings is not None:
+        (tmp_path / "settings.json").write_text(json.dumps(settings))
+    if local is not None:
+        (tmp_path / "settings.local.json").write_text(json.dumps(local))
+    return str(tmp_path)
+
+
+def test_plugin_available_true_when_installed_and_enabled(tmp_path):
+    root = _fake_claude_dir(
+        tmp_path,
+        {"version": 2, "plugins": {"run-to-completion@haiggoh": [{"scope": "user"}]}},
+        {"enabledPlugins": {"run-to-completion@haiggoh": True}})
+    assert c.plugin_available("run-to-completion", root) is True
+
+
+def test_plugin_available_false_when_not_installed(tmp_path):
+    root = _fake_claude_dir(tmp_path, {"version": 2, "plugins": {"something-else@haiggoh": []}})
+    assert c.plugin_available("run-to-completion", root) is False
+
+
+def test_plugin_available_false_when_installed_but_disabled(tmp_path):
+    # installed != enabled: a user can switch a plugin off without uninstalling it, and its
+    # commands go away with it.
+    root = _fake_claude_dir(
+        tmp_path,
+        {"version": 2, "plugins": {"run-to-completion@haiggoh": [{"scope": "user"}]}},
+        {"enabledPlugins": {"run-to-completion@haiggoh": False}})
+    assert c.plugin_available("run-to-completion", root) is False
+
+
+def test_local_settings_override_global_for_plugin_state(tmp_path):
+    root = _fake_claude_dir(
+        tmp_path,
+        {"version": 2, "plugins": {"run-to-completion@haiggoh": [{"scope": "user"}]}},
+        {"enabledPlugins": {"run-to-completion@haiggoh": True}},
+        {"enabledPlugins": {"run-to-completion@haiggoh": False}})
+    assert c.plugin_available("run-to-completion", root) is False
+
+
+def test_plugin_available_fails_closed_on_a_missing_or_corrupt_registry(tmp_path):
+    # Never advertise a command we cannot confirm exists.
+    assert c.plugin_available("run-to-completion", str(tmp_path / "nope")) is False
+    (tmp_path / "plugins").mkdir()
+    (tmp_path / "plugins" / "installed_plugins.json").write_text("{ not json")
+    assert c.plugin_available("run-to-completion", str(tmp_path)) is False
+
+
+def test_banner_probes_the_machine_when_no_hint_is_given(tmp_path, monkeypatch):
+    # The default path must actually consult the registry, not assume either answer.
+    root = _fake_claude_dir(
+        tmp_path,
+        {"version": 2, "plugins": {"run-to-completion@haiggoh": [{"scope": "user"}]}},
+        {"enabledPlugins": {"run-to-completion@haiggoh": True}})
+    monkeypatch.setenv("WAYPOINTS_CLAUDE_DIR", root)
+    assert "/ungate-queue" in _flat(c.format_banner(_with_gated()))
+    (tmp_path / "plugins" / "installed_plugins.json").write_text(
+        json.dumps({"version": 2, "plugins": {}}))
+    assert "/ungate-queue" not in _flat(c.format_banner(_with_gated()))

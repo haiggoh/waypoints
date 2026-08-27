@@ -83,8 +83,20 @@ waypoints.py reopen <id>                # undo done (inverse of `done`)
 waypoints.py toggle <id>                # flip an item's done state in one call
 waypoints.py priority <id> <level>      # int; higher sorts earlier in the banner (default 0)
 waypoints.py reorder <id> <position>    # move to an explicit 0-based position in the list
-waypoints.py prune                      # drop done items
+waypoints.py prune                      # MOVE all done items to the archive (destroys nothing)
+waypoints.py rm <id>                    # remove ONE item from the live store, into the archive
+#   Works on an OPEN item too (that is what it is for — clearing a stray probe without a hand-edit);
+#   it closes it on the way out and says so. Bare `rm` NEVER deletes.
+waypoints.py restore <id>               # archive -> live store, still done
+waypoints.py archive list [--json]      # the closed-item paper trail
+waypoints.py archive show <id>          # an archived item's full record
+waypoints.py rm <id> --delete --confirm # PERMANENT deletion. Archive-only, both flags required,
+#   one exact id. Refuses with exit 2 if either flag is missing or the item is still live.
 ```
+Item lifecycle: `open` → `done` (live, out of the banner) → `archived` (separate file, readable and
+restorable) → `deleted` (gone). The closed trail is how the user reconstructs where an error slipped
+in, so **nothing routine destroys it** — and `reopen <id>` auto-restores from the archive in one
+step, so a premature close is always recoverable. Prefer `rm` over hand-editing the store file.
 Prefer **`edit`** to fix or enrich an existing item — it keeps the `id` and `created`. Never
 `done`+re-`add` to "update" (that regenerates the id, drops `created`, and leaves a false ✓). When
 picking an item back up, `show <id>` to read its full `detail` (the banner only carries title +

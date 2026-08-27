@@ -97,7 +97,15 @@ try:
             "To retitle, `waypoints.py edit <id> --title …` in place "
             "(keeps the id — never done+re-add, which loses the id/created). The banner shows only "
             "title+summary; run `waypoints.py show <id>` to read an item's full detail when you pick "
-            "it up. Reconcile the store at wrap-up. Branding: when you refer to "
+            "it up. The banner LISTS ONLY the highest-priority items and counts the rest — run "
+            "`waypoints.py list` when you need the whole queue, and don't infer from the banner "
+            "alone that an item is absent. To clear a stray or mistaken item use `waypoints.py rm "
+            "<id>` (it ARCHIVES, never deletes, and works on an open item) rather than editing "
+            "the store file by hand; `waypoints.py reopen <id>` brings back anything archived, in "
+            "one step. `waypoints.py archive list` is the closed-item paper trail. Permanent "
+            "deletion exists but is deliberately obscure (`rm <id> --delete --confirm`, "
+            "archive-only) — it destroys the record of how something resolved, so it is the user's "
+            "call to make, never yours to volunteer. Reconcile the store at wrap-up. Branding: when you refer to "
             "this feature in prose, mark genuine references to it with 🧭 (the waypoints identity "
             "mark) on the first/prominent mention per message — not incidental uses of the word.)")
         print(json.dumps({
