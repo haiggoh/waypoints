@@ -453,7 +453,8 @@ def test_validate_verdict_rejects_gate_reason_on_non_gated():
 
 
 def test_validate_verdict_allows_gate_reason_when_gated():
-    assert c.validate_verdict("gated", "needs a decision") == ("gated", "needs a decision")
+    # validate_verdict returns the three verdict fields now: (tier, gate_reason, waiting_on).
+    assert c.validate_verdict("gated", "needs a decision") == ("gated", "needs a decision", None)
 
 
 def test_set_verdict_clearing_removes_keys_entirely():
@@ -1146,3 +1147,160 @@ def test_journal_is_never_pruned_by_the_backup_retention(tmp_path, monkeypatch):
 
 def test_the_ring_is_ten_now_that_history_lives_in_the_journal():
     assert c.BACKUP_KEEP_RECENT == 10
+
+
+# ---------------------------------------------------------------------------------------
+# 0.6.0 -- the `waiting` tier: blocked on ANOTHER ITEM IN THIS STORE reaching a milestone.
+# It earns a tier (rather than staying a prefix inside `gated`) only because the target is an
+# id this store holds, so the store can re-check it for free and release the item itself.
+# ---------------------------------------------------------------------------------------
+
+def test_waiting_is_a_tier_and_its_own_partition_group():
+    assert "waiting" in c.TIERS
+    items = []
+    c.add_item(items, "target")
+    c.add_item(items, "dependent", tier="waiting", waiting_on="target @ phase 2 lands")
+    g = c.partition(items)
+    assert [i["id"] for i in g["waiting"]] == ["dependent"]
+    # Its own group: NOT folded into either neighbour.
+    assert g["actionable"] == [] and g["gated"] == []
+    # And the sum invariant still lets a reader verify nothing was dropped.
+    assert sum(len(v) for v in g.values()) == len(items)
+
+
+def test_waiting_without_a_target_is_refused():
+    # An untargeted "waiting" is exactly the unfalsifiable label this tier exists to replace.
+    with pytest.raises(c.VerdictError):
+        c.validate_verdict("waiting")
+
+
+def test_waiting_target_must_name_a_milestone_not_just_an_item():
+    # "when that item is done" is often NOT the trigger, so the milestone is required.
+    with pytest.raises(c.VerdictError):
+        c.validate_verdict("waiting", waiting_on="some-item")
+    assert c.parse_waiting_on("some-item @ its API freezes") == ("some-item", "its API freezes")
+    # Surrounding whitespace is tolerated; the two halves are not.
+    assert c.parse_waiting_on("  a-b  @   the thing  ") == ("a-b", "the thing")
+
+
+def test_a_waiting_target_on_a_non_waiting_item_is_refused():
+    # Symmetric with the gate-reason rule: a record that disagrees with itself is refused.
+    for tier in ("do-now", "heavy", "gated"):
+        with pytest.raises(c.VerdictError):
+            c.validate_verdict(tier, waiting_on="x @ y")
+
+
+def test_gate_reason_and_waiting_on_cannot_both_apply():
+    with pytest.raises(c.VerdictError):
+        c.validate_verdict("waiting", gate_reason="needs a decision",
+                           waiting_on="x @ y")
+
+
+def test_retiering_away_from_waiting_drops_the_target():
+    items = []
+    c.add_item(items, "target")
+    c.add_item(items, "dep", tier="waiting", waiting_on="target @ ships")
+    c.set_verdict(items, "dep", tier="do-now")
+    assert "waiting_on" not in items[1] and items[1]["tier"] == "do-now"
+
+
+def test_clearing_the_verdict_leaves_no_tombstone():
+    items = []
+    c.add_item(items, "target")
+    c.add_item(items, "dep", tier="waiting", waiting_on="target @ ships")
+    c.set_verdict(items, "dep", tier=None)
+    assert "tier" not in items[1] and "waiting_on" not in items[1]
+
+
+def test_waiting_status_distinguishes_pending_landed_and_stale():
+    items = []
+    c.add_item(items, "target")
+    c.add_item(items, "dep", tier="waiting", waiting_on="target @ ships")
+    assert c.waiting_status(items[1], items)[0] == c.WAITING_PENDING
+    items[0]["done"] = True
+    assert c.waiting_status(items[1], items)[0] == c.WAITING_LANDED
+    c.add_item(items, "orphan", tier="waiting", waiting_on="ghost @ never")
+    # A target that does not exist is STALE, never landed: a renamed or mistyped id must not be
+    # indistinguishable from the work having happened.
+    assert c.waiting_status(items[2], items)[0] == c.WAITING_STALE
+
+
+def test_an_archived_done_target_still_releases_its_dependent():
+    items, archived = [], []
+    c.add_item(archived, "target")
+    archived[0]["done"] = True
+    c.add_item(items, "dep", tier="waiting", waiting_on="target @ ships")
+    assert c.waiting_status(items[0], items, archived)[0] == c.WAITING_LANDED
+
+
+def test_promotion_clears_the_tier_rather_than_guessing_one():
+    items = []
+    c.add_item(items, "target")
+    c.add_item(items, "dep", tier="waiting", waiting_on="target @ ships")
+    items[0]["done"] = True
+    promoted = c.promote_landed_waiting(items, today_str="2026-08-31")
+    assert [i["id"] for i, _t, _m in promoted] == ["dep"]
+    # UNTRIAGED, not do-now: the item's own weight was never assessed while it waited, so
+    # inventing one would be a verdict nobody made.
+    assert items[1].get("tier") is None and "waiting_on" not in items[1]
+    # ...and the target it waited on is preserved in the summary, so dropping waiting_on does
+    # not erase the only record of why it was parked.
+    note = items[1]["summary"][-1]
+    assert "RELEASED 2026-08-31" in note and "target @ ships" in note
+
+
+def test_promotion_leaves_pending_and_stale_items_alone():
+    items = []
+    c.add_item(items, "target")
+    c.add_item(items, "pending", tier="waiting", waiting_on="target @ ships")
+    c.add_item(items, "orphan", tier="waiting", waiting_on="ghost @ never")
+    assert c.promote_landed_waiting(items) == []
+    assert items[1]["tier"] == "waiting" and items[2]["tier"] == "waiting"
+
+
+def test_stale_waiting_reports_but_never_repairs():
+    items = []
+    c.add_item(items, "orphan", tier="waiting", waiting_on="ghost @ never")
+    stale = c.stale_waiting(items)
+    assert [(i["id"], t) for i, t in stale] == [("orphan", "ghost")]
+    # Untouched: which side is wrong is not something the store can know.
+    assert items[0]["tier"] == "waiting" and items[0]["waiting_on"] == "ghost @ never"
+
+
+def test_done_items_are_not_reported_as_waiting():
+    items = []
+    c.add_item(items, "orphan", tier="waiting", waiting_on="ghost @ never")
+    items[0]["done"] = True
+    assert c.stale_waiting(items) == []
+    assert c.promote_landed_waiting(items) == []
+
+
+def test_list_payload_carries_waiting_and_keeps_the_sum_honest():
+    items = []
+    c.add_item(items, "target", tier="do-now")
+    c.add_item(items, "dep", tier="waiting", waiting_on="target @ ships")
+    c.add_item(items, "blocked", tier="gated", gate_reason="needs you")
+    c.add_item(items, "fresh")
+    p = c.list_payload(items)
+    assert p["contract"] == 2
+    counts = p["counts"]
+    assert counts["waiting"] == 1
+    assert (counts["gated"] + counts["waiting"] + counts["actionable"]
+            + counts["untriaged"]) == counts["open"]
+    row = [r for r in p["items"] if r["id"] == "dep"][0]
+    # Present-and-null at the boundary, absent in the store: the same asymmetry as tier.
+    assert row["waiting_on"] == "target @ ships"
+    assert [r for r in p["items"] if r["id"] == "fresh"][0]["waiting_on"] is None
+
+
+def test_banner_resolves_waiting_targets_against_the_whole_store_not_the_display_list():
+    # Regression: the banner is handed only the SURFACEABLE items, so a landed (therefore done)
+    # target is absent from that list. Resolving against it reported every landed target as
+    # missing -- inverting the one signal the reader most needs.
+    items = []
+    c.add_item(items, "target")
+    c.add_item(items, "dep", tier="waiting", waiting_on="target @ ships")
+    items[0]["done"] = True
+    display = [i for i in items if not i.get("done")]
+    assert "can move NOW" not in c.format_banner(display, ungate_hint=False)
+    assert "can move NOW" in c.format_banner(display, ungate_hint=False, all_items=items)

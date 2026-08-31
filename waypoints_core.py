@@ -478,32 +478,72 @@ def _unique_id(items, base):
 
 # --- Optional triage verdict ----------------------------------------------------------------
 # A verdict says how an item can be picked up: `do-now` (bounded and self-contained), `heavy`
-# (doable alone but liable to sprawl), `gated` (needs something this store cannot supply).
+# (doable alone but liable to sprawl), `gated` (needs something this store cannot supply), or
+# `waiting` (blocked, but only on ANOTHER ITEM IN THIS STORE reaching a milestone).
 #
-# Both keys are ABSENT by default, not defaulted: an item nobody has assessed carries neither,
-# so every store written before this existed stays valid with no migration. "Untriaged" is a
-# real third state and NOT a synonym for actionable — an item nobody has looked at is not
-# thereby known to be unblocked. Views keep the three separate for exactly that reason.
-TIERS = ("do-now", "heavy", "gated")
+# The keys are ABSENT by default, not defaulted: an item nobody has assessed carries none of
+# them, so every store written before this existed stays valid with no migration. "Untriaged" is
+# a real state and NOT a synonym for actionable — an item nobody has looked at is not thereby
+# known to be unblocked. Views keep the states separate for exactly that reason.
+#
+# `waiting` was split out of `gated` on evidence, not taste. Distinguishing the four kinds of
+# block by WHAT RELEASES THEM is the whole point, because each needs a different mechanism and a
+# different owner: a PERSON (released by asking), a QUEUE ITEM (released when that item hits a
+# milestone), a RECURRING WORLD CONDITION, an EXTERNAL PARTY. Only the second kind is both
+# mechanical and knowable from inside this store, which is why only it earns a tier: the target
+# is an id we hold, so the store can re-check it for free and promote the item ITSELF. The other
+# three stay prefixes inside `gated`, since a shared state that carried no shared behaviour
+# would be a label pretending to be a mechanism.
+TIERS = ("do-now", "heavy", "gated", "waiting")
 GATED = "gated"
+WAITING = "waiting"
 ACTIONABLE_TIERS = ("do-now", "heavy")
+
+# A waiting target is REQUIRED to name a milestone, not just an item: "when X is done" is often
+# not the trigger — the thing you are waiting for is frequently a specific point partway through
+# X. A bare id would quietly lose that, and losing it is what makes a dependency untraversable.
+WAITING_ON_RE = re.compile(r"^\s*(?P<id>[^\s@]+)\s*@\s*(?P<milestone>\S.*?)\s*$")
 
 
 class VerdictError(ValueError):
-    """An invalid tier, or a gate reason on an item that isn't gated."""
+    """An invalid tier, a gate reason on an item that isn't gated, or a malformed/missing
+    waiting target on an item that is waiting."""
 
 
-def validate_verdict(tier, gate_reason=None):
-    """Raise VerdictError on a contradictory verdict; return (tier, gate_reason) unchanged.
+def parse_waiting_on(waiting_on):
+    """Split '<item-id> @ <milestone>' into (id, milestone). Raises VerdictError if it does not
+    carry both halves, so a target can never degrade into unparseable prose."""
+    m = WAITING_ON_RE.match(waiting_on or "")
+    if not m:
+        raise VerdictError(
+            "a waiting target must read '<item-id> @ <milestone>' (got %r). The milestone is "
+            "required: 'when that item is done' is often not the trigger." % (waiting_on,))
+    return m.group("id"), m.group("milestone")
+
+
+def validate_verdict(tier, gate_reason=None, waiting_on=None):
+    """Raise VerdictError on a contradictory verdict; return the verdict fields unchanged.
 
     A gate reason on a non-gated item is refused rather than quietly stored: it would be a
-    record that disagrees with itself, and the reason is what a reader acts on.
+    record that disagrees with itself, and the reason is what a reader acts on. The same rule
+    applies to a waiting target on a non-waiting item — and, symmetrically, a `waiting` item
+    with NO target is refused too, because an untargeted 'waiting' is exactly the unfalsifiable
+    label this tier exists to replace.
     """
     if tier is not None and tier not in TIERS:
         raise VerdictError("tier must be one of %s (got %r)" % (", ".join(TIERS), tier))
     if gate_reason and tier is not None and tier != GATED:
         raise VerdictError("a gate reason only applies to a %r item (tier is %r)" % (GATED, tier))
-    return tier, gate_reason
+    if waiting_on and tier is not None and tier != WAITING:
+        raise VerdictError("a waiting target only applies to a %r item (tier is %r)"
+                           % (WAITING, tier))
+    if tier == WAITING and not waiting_on:
+        raise VerdictError(
+            "a %r item needs --waiting-on '<item-id> @ <milestone>': the whole point of the "
+            "tier is that the store can re-check the target itself" % (WAITING,))
+    if waiting_on:
+        parse_waiting_on(waiting_on)
+    return tier, gate_reason, waiting_on
 
 
 def tier_of(item):
@@ -515,6 +555,10 @@ def is_gated(item):
     return item.get("tier") == GATED
 
 
+def is_waiting(item):
+    return item.get("tier") == WAITING
+
+
 def is_actionable(item):
     return item.get("tier") in ACTIONABLE_TIERS
 
@@ -524,17 +568,29 @@ def is_untriaged(item):
 
 
 def partition(items):
-    """Split into the three verdict groups. Every item lands in exactly one, so the counts
-    always add up to the input length — a reader can verify nothing was dropped."""
+    """Split into the four verdict groups. Every item lands in exactly one, so the counts
+    always add up to the input length — a reader can verify nothing was dropped.
+
+    `waiting` is its OWN group rather than being folded into either neighbour, because it
+    behaves like neither: it cannot be started now (so it is not actionable) but it needs no
+    human and releases itself (so burying it with the human-gated pile would hide the
+    dependency cascade)."""
     return {"gated": [i for i in items if is_gated(i)],
+            "waiting": [i for i in items if is_waiting(i)],
             "actionable": [i for i in items if is_actionable(i)],
             "untriaged": [i for i in items if is_untriaged(i)]}
 
 
-def set_verdict(items, item_id, tier=_UNSET, gate_reason=_UNSET):
+def set_verdict(items, item_id, tier=_UNSET, gate_reason=_UNSET, waiting_on=_UNSET):
     """Set or clear an item's verdict in place. Pass tier=None to clear the verdict entirely
-    (which also drops any gate reason, since it would be orphaned). Returns the item, or None
-    if no such id. Raises VerdictError on a contradictory combination."""
+    (which also drops any gate reason or waiting target, since they would be orphaned). Returns
+    the item, or None if no such id. Raises VerdictError on a contradictory combination.
+
+    ⚠️ Retiering AWAY from gated silently drops gate_reason, and away from waiting drops
+    waiting_on — by design, since each is meaningless without its tier. That is why a migration
+    that moves prose out of gate_reason into waiting_on must do BOTH IN ONE CALL: setting the
+    tier first and the target second loses the prose in between, and the prose is often the only
+    record of what the item was actually waiting for."""
     it = get_item(items, item_id)
     if it is None:
         return None
@@ -548,12 +604,18 @@ def set_verdict(items, item_id, tier=_UNSET, gate_reason=_UNSET):
         new_reason = it.get("gate_reason") if new_tier == GATED else None
     else:
         new_reason = gate_reason
+    if waiting_on is _UNSET:
+        new_waiting = it.get("waiting_on") if new_tier == WAITING else None
+    else:
+        new_waiting = waiting_on
     if new_tier is None:
         new_reason = None
-    validate_verdict(new_tier, new_reason)
+        new_waiting = None
+    validate_verdict(new_tier, new_reason, new_waiting)
     # Absent, not null: a cleared verdict removes the keys so the item is byte-identical to
     # one that was never triaged. Anything else would leak a tombstone into the store.
-    for key, val in (("tier", new_tier), ("gate_reason", new_reason)):
+    for key, val in (("tier", new_tier), ("gate_reason", new_reason),
+                     ("waiting_on", new_waiting)):
         if val:
             it[key] = val
         else:
@@ -561,9 +623,81 @@ def set_verdict(items, item_id, tier=_UNSET, gate_reason=_UNSET):
     return it
 
 
+# ---------------------------------------------------------------------------------------
+# Waiting-target resolution. A waiting item names a target it holds in this very store, so
+# re-checking it costs nothing and needs no human — which is precisely what makes `waiting`
+# a mechanism rather than a label.
+# ---------------------------------------------------------------------------------------
+
+WAITING_PENDING = "pending"    # the target exists and is still open
+WAITING_LANDED = "landed"      # the target is done (or archived as done) -> promote
+WAITING_STALE = "stale"        # the target id is nowhere to be found -> warn, never guess
+
+
+def waiting_status(item, items, archived=()):
+    """Where a waiting item's target stands: (status, target_id, milestone).
+
+    A target that is DONE releases the item. A target that does not exist at all is `stale`
+    rather than landed — an id that was renamed or removed must never silently satisfy a
+    dependency, because that is indistinguishable from the work having happened."""
+    try:
+        target_id, milestone = parse_waiting_on(item.get("waiting_on"))
+    except VerdictError:
+        return WAITING_STALE, None, None
+    target = get_item(items, target_id) or get_item(list(archived), target_id)
+    if target is None:
+        return WAITING_STALE, target_id, milestone
+    if target.get("done"):
+        return WAITING_LANDED, target_id, milestone
+    return WAITING_PENDING, target_id, milestone
+
+
+def promote_landed_waiting(items, archived=(), today_str=None):
+    """Retier every waiting item whose target has landed. Returns the list of
+    (item, target_id, milestone) promoted, so a caller can announce them.
+
+    Promotion clears the tier to UNTRIAGED rather than guessing do-now or heavy. The item's own
+    weight was never recorded — `tier` was holding `waiting` — so inventing one would be a
+    verdict nobody made. Untriaged is the honest state and is a real view, so the item surfaces
+    for triage instead of being quietly assumed bounded. The target and milestone are written
+    into the summary on the way out, because dropping waiting_on would otherwise erase the only
+    record of why the item had been parked."""
+    today_str = today_str or today()
+    promoted = []
+    for it in list(items):
+        if it.get("done") or not is_waiting(it):
+            continue
+        status, target_id, milestone = waiting_status(it, items, archived)
+        if status != WAITING_LANDED:
+            continue
+        note = ("RELEASED %s: the item this was waiting on landed — %s @ %s. Now untriaged on "
+                "purpose: its own weight was never assessed while it sat in `waiting`, so it "
+                "needs a verdict rather than an assumed one." % (today_str, target_id, milestone))
+        it.setdefault("summary", []).append(note)
+        set_verdict(items, it["id"], tier=None)
+        promoted.append((it, target_id, milestone))
+    return promoted
+
+
+def stale_waiting(items, archived=()):
+    """Every waiting item whose target cannot be found: [(item, target_id)].
+
+    Surfaced rather than repaired. A dangling target means the store disagrees with itself, and
+    which side is wrong — a renamed target or a mistyped dependency — is not something the store
+    can know."""
+    out = []
+    for it in items:
+        if it.get("done") or not is_waiting(it):
+            continue
+        status, target_id, _ = waiting_status(it, items, archived)
+        if status == WAITING_STALE:
+            out.append((it, target_id))
+    return out
+
+
 def add_item(items, title, detail="", surface_on=None, created=None, id=None, summary=None,
-             tier=None, gate_reason=None):
-    validate_verdict(tier, gate_reason)
+             tier=None, gate_reason=None, waiting_on=None):
+    validate_verdict(tier, gate_reason, waiting_on)
     item = {
         "id": id or _unique_id(items, slugify(title)),
         "title": title,
@@ -578,6 +712,8 @@ def add_item(items, title, detail="", surface_on=None, created=None, id=None, su
         item["tier"] = tier
     if gate_reason:
         item["gate_reason"] = gate_reason
+    if waiting_on:
+        item["waiting_on"] = waiting_on
     items.append(item)
     return item
 
@@ -727,7 +863,7 @@ def surfaceable(items, today_str):
 # LIST_CONTRACT is versioned INDEPENDENTLY of the store's own `version`. That separation is the
 # whole point: a reader pins the output contract and the on-disk format stays free to change
 # underneath it. Documenting the raw store file instead would couple every reader to internals.
-LIST_CONTRACT = 1
+LIST_CONTRACT = 2
 
 
 def list_payload(items, today_str=None):
@@ -739,13 +875,20 @@ def list_payload(items, today_str=None):
       counts    object — total, open, done, surfaceable, gated, actionable, untriaged
       items     array  — every item, in store order, each with:
                            id, title, summary[], detail, created, surface_on, done, priority,
-                           surfaceable (bool, computed), tier (str|null), gate_reason (str|null)
+                           surfaceable (bool, computed), tier (str|null), gate_reason (str|null),
+                           waiting_on (str|null)
 
-    `tier`/`gate_reason` are always PRESENT here and null when unset — a consumer reading a
-    view should not have to distinguish a missing key from a null one. In the STORE they stay
-    absent; that asymmetry is deliberate and belongs to the boundary between the two.
+    `tier`/`gate_reason`/`waiting_on` are always PRESENT here and null when unset — a consumer
+    reading a view should not have to distinguish a missing key from a null one. In the STORE
+    they stay absent; that asymmetry is deliberate and belongs to the boundary between the two.
 
-    gated + actionable + untriaged == open, so a consumer can verify no item was dropped.
+    gated + waiting + actionable + untriaged == open, so a consumer can verify no item was
+    dropped.
+
+    CONTRACT 2 (was 1) added the `waiting` count and the `waiting_on` field. The version moved
+    because the sum invariant above CHANGED: a consumer that checked gated + actionable +
+    untriaged == open would now silently fail its own audit on any store containing a waiting
+    item. An additive field alone would not have justified a bump; a changed invariant does.
     """
     today_str = today_str or today()
     surf = {i["id"] for i in surfaceable(items, today_str)}
@@ -765,6 +908,7 @@ def list_payload(items, today_str=None):
             "surfaceable": i.get("id") in surf,
             "tier": i.get("tier"),
             "gate_reason": i.get("gate_reason"),
+            "waiting_on": i.get("waiting_on"),
         })
     return {
         "contract": LIST_CONTRACT,
@@ -775,6 +919,7 @@ def list_payload(items, today_str=None):
             "done": sum(1 for i in items if i.get("done")),
             "surfaceable": len(surf),
             "gated": len(groups["gated"]),
+            "waiting": len(groups["waiting"]),
             "actionable": len(groups["actionable"]),
             "untriaged": len(groups["untriaged"]),
         },
@@ -959,7 +1104,12 @@ def _wrap(text, indent):
                           break_on_hyphens=False, break_long_words=False)
 
 
-def format_banner(items, ungate_hint=None):
+def format_banner(items, ungate_hint=None, all_items=None, archived=()):
+    # `items` is what to SHOW (already filtered to surfaceable/open by the caller); `all_items` is
+    # the universe used to RESOLVE a waiting target. They must be separate: a target that has
+    # landed is by definition done, so it is absent from the display list, and resolving against
+    # the display list would report every landed target as nonexistent -- turning the one case
+    # the reader most needs to see into a false "no such target".
     """Banner text for the given (already-surfaceable) items, or '' if none.
 
     ids are intentionally NOT printed here — they read as a redundant restatement of the title
@@ -1001,10 +1151,18 @@ def format_banner(items, ungate_hint=None):
         lines.append(_wrap(note, "  "))
     bullet_indent = "  • "
     gated_indent = "  ⛔ "
+    waiting_indent = "  ⏳ "
     date_indent = " " * len(bullet_indent)
     for i in shown:
         title = _short_title(i["title"]) if compact else i["title"]
-        lines.append(_wrap(title, gated_indent if is_gated(i) else bullet_indent))
+        indent = (gated_indent if is_gated(i)
+                  else waiting_indent if is_waiting(i) else bullet_indent)
+        lines.append(_wrap(title, indent))
+        # A waiting item's TARGET is shown even in compact mode. Without it the banner says an
+        # item is parked but not on what, which is the state that made these untraversable in
+        # prose -- and it is one short line, unlike a gate reason.
+        if is_waiting(i) and i.get("waiting_on"):
+            lines.append(_wrap(f"← {i['waiting_on']}", date_indent))
         # The date always gets its own line, hanging-indented under the title, so its
         # placement/indentation is fixed regardless of title length or pane width --
         # unlike appending it to the title line, this needs no wrap heuristics.
@@ -1026,4 +1184,17 @@ def format_banner(items, ungate_hint=None):
         gated_line += (f", or `{UNGATE_COMMAND}` to work through what is blocking them."
                        if ungate_hint else ".")
         lines.append(_wrap(gated_line, "  "))
+    # Waiting is counted separately from gated on purpose: gated needs the READER to do
+    # something, waiting needs nobody. Collapsing them would tell the reader they owe 15 answers
+    # they do not owe.
+    waiting = [i for i in items if is_waiting(i)]
+    if waiting:
+        universe = all_items if all_items is not None else items
+        landed = sum(1 for i in waiting
+                     if waiting_status(i, universe, archived)[0] == WAITING_LANDED)
+        wl = (f"⏳ {len(waiting)} waiting on another item — nothing for you to do; each "
+              f"releases itself. `waypoints.py list --waiting` shows what each is waiting for")
+        wl += (f". ⚠️ {landed} of them can move NOW (target already landed) — "
+               f"`waypoints.py resolve` releases them." if landed else ".")
+        lines.append(_wrap(wl, "  "))
     return "\n".join(lines)

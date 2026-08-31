@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Extensionless launcher, so the public command reads as a command rather than as a script:
+#
+#     waypoints              (and, in Claude Code shell mode)   ! waypoints
+#
+# Claude Code adds an enabled plugin's root bin/ directory to the Bash tool's PATH, so this is
+# reachable with no plugin path and no environment variables. bin/waypoints.py stays as a
+# compatibility entry point -- it is what existing notes, skills and muscle memory call.
+#
+# Resolve this launcher through any symlink chain BEFORE deriving the plugin root, so it works
+# both from the installed plugin's bin/ and from a development link such as ~/.local/bin/waypoints.
+SOURCE="${BASH_SOURCE[0]}"
+
+while [[ -L "$SOURCE" ]]; do
+  SOURCE_DIR="$(
+    CDPATH= cd -P -- "$(dirname -- "$SOURCE")" &&
+    pwd -P
+  )"
+  LINK_TARGET="$(readlink "$SOURCE")"
+
+  if [[ "$LINK_TARGET" = /* ]]; then
+    SOURCE="$LINK_TARGET"
+  else
+    SOURCE="$SOURCE_DIR/$LINK_TARGET"
+  fi
+done
+
+SCRIPT_DIR="$(
+  CDPATH= cd -P -- "$(dirname -- "$SOURCE")" &&
+  pwd -P
+)"
+
+exec python3 "$SCRIPT_DIR/waypoints.py" "$@"

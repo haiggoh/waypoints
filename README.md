@@ -49,7 +49,7 @@ waypoints.py archive list           # the closed-item paper trail (--json for th
 waypoints.py archive show adobe-publish
 waypoints.py rm adobe-publish --delete --confirm   # permanent deletion: archive-only, two flags
 waypoints.py triage adobe-publish --tier gated --gate-reason "needs your call on A vs B"
-waypoints.py list --gated               # also --actionable / --untriaged, plus --open
+waypoints.py list --gated               # also --waiting / --actionable / --untriaged, plus --open
 waypoints.py list --json                # documented machine-readable contract
 ```
 
@@ -128,6 +128,51 @@ discloses the rest as a count rather than listing them. Nothing is hidden — th
 open items, the residue is counted explicitly, and `waypoints.py list` shows everything. Tune with
 `$WAYPOINTS_BANNER_MAX_ITEMS` and `$WAYPOINTS_BANNER_TITLE_MAX`.
 
+## The `waypoints` command, and why output size is a feature
+
+Claude Code adds an enabled plugin's `bin/` directory to the Bash tool's `PATH`, so the public
+command is just:
+
+```
+waypoints                 # a concise dashboard: counts, the top items, what to type next
+waypoints list            # every item, ONE LINE each, grouped by verdict
+waypoints list --verbose  # ...plus bullets, gate reasons, dates and priorities
+waypoints show <id>       # the full detail of one item
+```
+
+`bin/waypoints.py` remains a compatibility entry point — existing notes and habits keep working.
+
+The compact default is not cosmetic. Claude Code returns roughly **30,000 characters** of a
+command's output inline and saves the rest to a file, and on a real ~150-item store the old
+verbose render was **~32.5 KB** — just past the boundary, so the tail quietly stopped being
+readable in place. The same store now renders at **~19.6 KB** compact and **~1 KB** as the
+dashboard. Nothing was deleted; bullets, gate reasons and dates moved behind `--verbose` and
+`show`.
+
+Paging is bounded by **output size as well as item count**, because title lengths vary so much
+that a fixed item count either wastes most of the window or overshoots it:
+
+```
+waypoints list --limit 50          # at most 50 items per page
+waypoints list --max-chars 20000   # end the page before it exceeds this
+waypoints list --page 2            # the footer prints the exact next-page command
+waypoints list --all               # no limits — for a real terminal or a redirection
+waypoints list --json              # complete contract, NEVER paginated
+```
+
+Two guarantees hold at every budget, and each is enforced by a test rather than asserted here:
+
+- **No item is ever unreachable by paginating.** A page always carries at least one whole item.
+- **A budget that cannot be honoured is stated, not hidden.** If one item is larger than the whole
+  budget, it still ships and the output says the budget could not be met.
+
+A page's size is obtained by **rendering the candidate page and measuring it**, never by
+estimating — an estimate got it wrong twice in one sitting (first by omitting section-header and
+footer cost, then by a single character, which is still a breach). It is counted in **UTF-8 bytes**
+rather than characters: bytes ≥ characters always, so a byte-safe page is safe under either
+reading of the ceiling, whereas a character-safe page is not — these titles are full of multi-byte
+`—`, `←` and `⏳`, which ran ~1.3% over a 26,000 budget when measured as bytes.
+
 **No hard dependencies.** When more than a few items are gated, the summary line offers
 `/ungate-queue` — a command from the separate `run-to-completion` plugin — but only after checking
 that it is installed *and* enabled. Without it, the line simply points at this plugin's own
@@ -150,8 +195,40 @@ Some open items aren't waiting on effort, they're waiting on *something*. Mark t
 waypoints.py triage adobe-publish --tier gated --gate-reason "needs your call on A vs B"
 ```
 
-`--tier` is `do-now` (bounded, self-contained), `heavy` (doable alone but liable to sprawl), or
-`gated`. Retiering away from `gated` drops the reason in the same call, so unblocking is one command.
+`--tier` is `do-now` (bounded, self-contained), `heavy` (doable alone but liable to sprawl),
+`gated` (needs something this store cannot supply), or `waiting` (blocked only on **another item
+in this store** reaching a milestone). Retiering away from `gated` drops the reason in the same
+call, so unblocking is one command — and for the same reason a migration into `waiting` must move
+the tier and the target **together**, or the prose is lost in between.
+
+### `waiting` — the block that releases itself
+
+```
+waypoints.py triage launcher-phase-3 --tier waiting \
+    --waiting-on "lean-capability-profiles @ the matrix is decided"
+waypoints.py list --waiting
+waypoints.py resolve
+```
+
+`waiting` is a real tier rather than another prefix inside `gated`, on one specific ground: the
+target is an id this store already holds, so the store can re-check it for free and release the
+item **itself**. Blocks that need a person, a recurring world condition, or an external party
+share no such mechanism, so they stay prefixes inside `gated` — a shared state that carried no
+shared behaviour would be a label pretending to be a mechanism.
+
+- The milestone is **required**. `"<item-id> @ <milestone>"` — because *"when that item is done"*
+  is frequently not the actual trigger; often you are waiting on a specific point partway through.
+  A bare id is refused, and so is a `waiting` item with no target at all.
+- **Closing a target releases its dependents automatically**, to `untriaged` — never to a guessed
+  `do-now`. Their own weight was never assessed while `tier` was holding `waiting`, so inventing
+  one would be a verdict nobody made. The target and milestone are written into the item's summary
+  on the way out, so nothing is erased.
+- A target that **does not exist** is reported as stale and **never repaired**. Whether the target
+  was renamed or the dependency mistyped is not something the store can know — and a missing id
+  must never be indistinguishable from the work having happened.
+- In the banner, waiting items are marked `⏳` with their target, and counted **separately** from
+  gated: gated needs *you*, waiting needs nobody, so merging the two would tell you that you owe
+  answers you do not owe.
 
 In the banner, gated items are marked `⛔` in place. Once there are more than a few, the group
 collapses to one counted line naming `/waypoints-gated` to expand it — the **count is always

@@ -25,8 +25,9 @@ updates never touch it:
 `surface_on` is the **earliest** date an item appears — NOT an expiry. Undated items show every
 session; dated ones show on and after that date, and both persist until done.
 
-**Optional verdict fields.** An item may also carry `tier` (`do-now` | `heavy` | `gated`) and, when
-gated, `gate_reason`. Both are **absent unless set** — an untriaged item has neither key, so nothing
+**Optional verdict fields.** An item may also carry `tier` (`do-now` | `heavy` | `gated` |
+`waiting`) and, when gated, `gate_reason`; when waiting, `waiting_on` of the shape
+`"<item-id> @ <milestone>"`. Both are **absent unless set** — an untriaged item has neither key, so nothing
 written before verdicts existed needs migrating, and `untriaged` stays a real third state rather
 than a silent synonym for "actionable". An item nobody has assessed is not thereby known to be
 unblocked.
@@ -39,7 +40,7 @@ file, which is free to change shape:
 ```json
 { "contract": 1, "generated": "YYYY-MM-DD",
   "counts": { "total": 0, "open": 0, "done": 0, "surfaceable": 0,
-              "gated": 0, "actionable": 0, "untriaged": 0 },
+              "gated": 0, "waiting": 0, "actionable": 0, "untriaged": 0 },
   "items": [ { "id": "…", "title": "…", "summary": [], "detail": "…",
                "created": "YYYY-MM-DD", "surface_on": null, "done": false, "priority": 0,
                "surfaceable": true, "tier": null, "gate_reason": null } ] }
@@ -48,11 +49,13 @@ file, which is free to change shape:
 - `contract` versions the **output**, independently of the store's `version`.
 - `tier`/`gate_reason` are always present here and `null` when unset — a consumer never has to tell
   a missing key from a null one, even though the store itself omits them.
-- `gated + actionable + untriaged == open`, so you can verify nothing was dropped.
+- `gated + waiting + actionable + untriaged == open`, so you can verify nothing was dropped.
+  (Contract **2** added `waiting` and `waiting_on`; the version moved because this very sum
+  changed, so a consumer auditing the old three-way sum would fail its own audit.)
 - A filtered view adds `"view"` and narrows `items`, but `counts` still describe the **whole**
   store — a subset should never be mistakable for the total.
 
-**Symmetric views, equal citizens:** `--gated`, `--actionable`, `--untriaged` (add `--open` to drop
+**Symmetric views, equal citizens:** `--gated`, `--waiting`, `--actionable`, `--untriaged` (add `--open` to drop
 done items). None is the default and none is privileged. In particular the store does **not** sort
 gated items last: a gate reason is a question you owe yourself, and burying it would assume some
 *other* tool is consuming the rest of the list.
@@ -70,8 +73,13 @@ close items on their behalf and surface the open ones in conversation. Use the b
 ```sh
 waypoints.py list                       # Claude Code v2.1.91+ puts the plugin's bin/ on the Bash-tool PATH
 waypoints.py list --json                # the documented contract above (for reading, not parsing the store)
-waypoints.py list --gated|--actionable|--untriaged [--open]   # symmetric views
-waypoints.py triage <id> --tier do-now|heavy|gated [--gate-reason "…"] | --clear
+waypoints                            # bare = dashboard; `waypoints` is on PATH (so is waypoints.py)
+waypoints.py list                    # ONE LINE per item, grouped; --verbose restores the rest
+waypoints.py list --gated|--waiting|--actionable|--untriaged [--open]   # symmetric views
+waypoints.py list [--limit N] [--page N] [--max-chars N] [--all]        # bounded output
+waypoints.py triage <id> --tier do-now|heavy|gated|waiting
+                 [--gate-reason "…"] [--waiting-on "<id> @ <milestone>"] | --clear
+waypoints.py resolve                 # release waiting items whose target landed
 waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on YYYY-MM-DD]
 waypoints.py edit <id> [--title "…"] [--add-point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on]
 #   --add-point APPENDS a bullet, keeping the existing ones — this is what you want when recording new information.
@@ -120,7 +128,15 @@ the user can make, a credential, them to be physically present, or an external s
 `triage <id> --tier gated --gate-reason "<what it's waiting on>"` instead of leaving it looking
 actionable. Write the reason as *the thing that would unblock it*, not as a restatement of the task
 ("needs the user to choose between A and B", not "blocked"). When the blocker clears, retier it
-(`--tier do-now`) — that drops the stale reason in the same call. Past a few gated items the banner
+(`--tier do-now`) — that drops the stale reason in the same call.
+
+**Blocked on another ITEM, not on a person?** Use `--tier waiting --waiting-on "<id> @ <milestone>"`
+instead of `gated`. It is the one block this store can clear by itself: closing the target releases
+the dependent automatically (to `untriaged`, since its own weight was never assessed while it
+waited). Give the milestone — "when that item is done" is often not the real trigger. Do NOT also
+leave a `WAIT:` prefix in a gate reason afterwards: that is two records of one fact, and the store
+refuses a gate reason on a non-gated item anyway, so a half-migration silently drops the prose.
+Move tier and target in the SAME call. Past a few gated items the banner
 collapses them into one counted line with `/waypoints-gated` to expand, so the reason is what makes
 that line worth expanding.
 

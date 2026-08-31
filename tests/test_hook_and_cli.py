@@ -296,10 +296,16 @@ def test_list_json_emits_the_documented_contract(tmp_path):
     r = _run([CLI, "list", "--json"], store, "2026-07-12")
     assert r.returncode == 0
     p = json.loads(r.stdout)
-    assert p["contract"] == 1
+    # Contract 2 added the `waiting` count and `waiting_on`. The bump is deliberate: the
+    # documented sum invariant changed from gated+actionable+untriaged to
+    # gated+waiting+actionable+untriaged, so a consumer auditing the old sum would break.
+    assert p["contract"] == 2
+    assert "waiting" in p["counts"]
+    assert (p["counts"]["gated"] + p["counts"]["waiting"] + p["counts"]["actionable"]
+            + p["counts"]["untriaged"]) == p["counts"]["open"]
     assert p["generated"] == "2026-07-12"
     assert set(p["counts"]) == {"total", "open", "done", "surfaceable", "gated",
-                                "actionable", "untriaged"}
+                                "waiting", "actionable", "untriaged"}
     row = p["items"][0]
     # Every documented field is present, and the verdict fields are null rather than missing.
     for key in ("id", "title", "summary", "detail", "created", "surface_on", "done",
@@ -886,3 +892,307 @@ def test_cli_journal_keeps_one_line_per_entry_despite_a_multiline_detail(tmp_pat
     assert len(body) == 1 and "line three" not in body[0] and "…" in body[0]
     # the raw value is untouched on disk -- shortening is a rendering choice, not a data loss
     assert _jlines(store)[-1]["argv"][-1] == detail
+
+
+# ---------------------------------------------------------------------------------------
+# 0.6.0 -- the public CLI: an extensionless launcher, a dashboard for the bare command, a
+# compact title-only list, and pagination bounded by output size as well as item count.
+#
+# The compact default exists because the verbose render crossed Claude Code's inline-output
+# ceiling: at ~148 items it was ~32.5 KB against a fixed ~30 KB boundary, so the tail became a
+# saved file instead of something readable in place.
+# ---------------------------------------------------------------------------------------
+
+LAUNCHER = os.path.join(ROOT, "bin", "waypoints")
+
+
+def _sh(argv, store, today=None):
+    """Run the extensionless launcher (not python + the .py) so the shim itself is tested."""
+    env = _env(store, today)
+    return subprocess.run(argv, capture_output=True, text=True, env=env)
+
+
+def _seed_tiers(store):
+    _run([CLI, "add", "Decide the matrix"], store, "2026-08-31")
+    _run([CLI, "add", "Phase 3 migration"], store, "2026-08-31")
+    _run([CLI, "add", "Needs Photoshop"], store, "2026-08-31")
+    _run([CLI, "triage", "decide-the-matrix", "--tier", "do-now"], store, "2026-08-31")
+    _run([CLI, "triage", "needs-photoshop", "--tier", "gated",
+          "--gate-reason", "ENV: Photoshop must be running"], store, "2026-08-31")
+    _run([CLI, "triage", "phase-3-migration", "--tier", "waiting",
+          "--waiting-on", "decide-the-matrix @ the matrix is decided"], store, "2026-08-31")
+
+
+def test_extensionless_launcher_matches_the_py_entry_point(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    assert os.access(LAUNCHER, os.X_OK)
+    mode = subprocess.run(["git", "ls-files", "-s", "bin/waypoints"], cwd=ROOT,
+                          capture_output=True, text=True).stdout
+    assert mode.startswith("100755"), "the launcher must be mode 100755 in git, not just on disk"
+    via_sh = _sh([LAUNCHER, "list"], store, "2026-08-31")
+    via_py = _run([CLI, "list"], store, "2026-08-31")
+    assert via_sh.returncode == 0
+    assert via_sh.stdout == via_py.stdout, "waypoints.py stays a compatibility entry point"
+
+
+def test_launcher_resolves_through_a_symlink_chain(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    direct = _sh([LAUNCHER, "list"], store, "2026-08-31").stdout
+    link = tmp_path / "abs-waypoints"
+    link.symlink_to(LAUNCHER)
+    chain = tmp_path / "chain-waypoints"
+    chain.symlink_to(link)
+    spaced_dir = tmp_path / "dir with spaces"
+    spaced_dir.mkdir()
+    spaced = spaced_dir / "waypoints"
+    spaced.symlink_to(LAUNCHER)
+    for label, l in (("absolute", link), ("two-deep chain", chain), ("path with spaces", spaced)):
+        assert _sh([str(l), "list"], store, "2026-08-31").stdout == direct, label
+
+
+def test_bare_command_is_a_dashboard_not_an_error(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    r = _sh([LAUNCHER], store, "2026-08-31")
+    assert r.returncode == 0, "a bare `waypoints` used to be an argparse error"
+    assert "1 gated" in r.stdout and "1 waiting" in r.stdout
+    assert "Commands:" in r.stdout and "waypoints show ID" in r.stdout
+    # It must stay SMALL -- growing into the full list would hit the ceiling that made the
+    # compact list necessary in the first place.
+    assert len(r.stdout) < 2000
+    assert r.stdout == _run([CLI, "dashboard"], store, "2026-08-31").stdout
+
+
+def test_bare_command_on_an_empty_store_says_how_to_start(tmp_path):
+    store = tmp_path / "s.json"
+    r = _sh([LAUNCHER], store, "2026-08-31")
+    assert r.returncode == 0 and "waypoints add" in r.stdout
+
+
+def test_compact_list_is_grouped_with_waiting_in_its_own_section(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    out = _run([CLI, "list"], store, "2026-08-31").stdout
+    assert "ACTIONABLE" in out and "WAITING" in out and "GATED" in out
+    # waiting sits BETWEEN actionable and gated -- not absorbed into either.
+    assert out.index("ACTIONABLE") < out.index("WAITING") < out.index("GATED")
+    # Compact means the gate reason is NOT in the default view...
+    assert "Photoshop must be running" not in out
+    # ...but the waiting TARGET is, because it is the whole value of the state.
+    assert "decide-the-matrix @ the matrix is decided" in out
+    assert "1 actionable" in out and "1 waiting" in out and "1 gated" in out
+    assert "--waiting" in out, "the views stay discoverable from the default one"
+
+
+def test_verbose_restores_everything_the_compact_view_moved(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    out = _run([CLI, "list", "--verbose"], store, "2026-08-31").stdout
+    assert "Photoshop must be running" in out
+    assert "[gated]" in out
+
+
+def test_long_titles_are_trimmed_in_compact_and_whole_in_verbose(tmp_path):
+    store = tmp_path / "s.json"
+    long_title = "T" + "i" * 300
+    _run([CLI, "add", long_title], store, "2026-08-31")
+    compact = _run([CLI, "list"], store, "2026-08-31").stdout
+    verbose = _run([CLI, "list", "--verbose"], store, "2026-08-31").stdout
+    assert "…" in compact and long_title not in compact
+    assert long_title in verbose, "--verbose must not lose information"
+
+
+def test_waiting_view_is_symmetric_with_the_other_views(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    out = _run([CLI, "list", "--waiting"], store, "2026-08-31").stdout
+    assert "phase-3-migration" in out
+    assert "decide-the-matrix]" not in out and "needs-photoshop" not in out
+    j = json.loads(_run([CLI, "list", "--json", "--waiting"], store, "2026-08-31").stdout)
+    assert j["view"] == "waiting" and [i["id"] for i in j["items"]] == ["phase-3-migration"]
+    # Counts still describe the WHOLE store, so a filtered view says what it is a subset of.
+    assert j["counts"]["open"] == 3
+
+
+def test_a_valid_target_outside_the_current_view_is_not_called_missing(tmp_path):
+    # Regression: resolving a target against the FILTERED list reported a perfectly good
+    # dependency as nonexistent, because the target sat outside the view.
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    out = _run([CLI, "list", "--waiting"], store, "2026-08-31").stdout
+    assert "no such target" not in out and "does not exist" not in out
+
+
+def test_triage_to_waiting_requires_a_milestone(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    _run([CLI, "add", "Another"], store, "2026-08-31")
+    bare = _run([CLI, "triage", "another", "--tier", "waiting"], store, "2026-08-31")
+    assert bare.returncode == 2 and "refused" in bare.stdout
+    no_milestone = _run([CLI, "triage", "another", "--tier", "waiting",
+                         "--waiting-on", "decide-the-matrix"], store, "2026-08-31")
+    assert no_milestone.returncode == 2 and "milestone" in no_milestone.stdout
+
+
+def test_triage_warns_when_the_named_target_does_not_exist(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    _run([CLI, "add", "Orphan"], store, "2026-08-31")
+    r = _run([CLI, "triage", "orphan", "--tier", "waiting",
+              "--waiting-on", "ghost-item @ never"], store, "2026-08-31")
+    assert r.returncode == 0, "recorded, not refused -- the target may be added later"
+    assert "no item with that id" in r.stdout
+
+
+def test_closing_a_target_releases_what_waited_on_it(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    r = _run([CLI, "done", "decide-the-matrix"], store, "2026-08-31")
+    assert "released 1 item(s)" in r.stdout and "phase-3-migration" in r.stdout
+    assert "UNTRIAGED on purpose" in r.stdout
+    j = json.loads(_run([CLI, "list", "--json"], store, "2026-08-31").stdout)
+    dep = [i for i in j["items"] if i["id"] == "phase-3-migration"][0]
+    assert dep["tier"] is None and dep["waiting_on"] is None
+    assert any("RELEASED" in b for b in dep["summary"])
+
+
+def test_resolve_reports_stale_targets_and_releases_nothing_prematurely(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    _run([CLI, "add", "Orphan"], store, "2026-08-31")
+    _run([CLI, "triage", "orphan", "--tier", "waiting",
+          "--waiting-on", "ghost-item @ never"], store, "2026-08-31")
+    r = _run([CLI, "resolve"], store, "2026-08-31")
+    assert r.returncode == 0
+    assert "nothing released" in r.stdout
+    assert "ghost-item" in r.stdout and "Not repaired" in r.stdout
+    # Untouched.
+    j = json.loads(_run([CLI, "list", "--json"], store, "2026-08-31").stdout)
+    assert [i for i in j["items"] if i["id"] == "orphan"][0]["tier"] == "waiting"
+
+
+def test_resolve_releases_a_target_that_landed_by_other_means(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    # Simulate the store drifting (an older version, or a hand edit) rather than a `done` call.
+    raw = json.loads(store.read_text())
+    for i in raw["items"]:
+        if i["id"] == "decide-the-matrix":
+            i["done"] = True
+    store.write_text(json.dumps(raw))
+    r = _run([CLI, "resolve"], store, "2026-08-31")
+    assert "released 1 waiting item(s)" in r.stdout and "phase-3-migration" in r.stdout
+
+
+def _walk_pages(store, extra, budget):
+    """Every page at a given budget: (pages, items_seen, silent_breaches, multi_breaches)."""
+    page, seen, silent, multi = 1, 0, 0, 0
+    while True:
+        out = _run([CLI, "list", "--max-chars", str(budget), "--page", str(page)] + extra,
+                   store, "2026-08-31").stdout
+        if "past the end" in out:
+            break
+        size = len(out.rstrip("\n").encode("utf-8"))
+        if size > budget:
+            if "could not be honoured for these" in out:
+                multi += 1
+            elif "could not be honoured for this single item" not in out:
+                silent += 1
+        seen += sum(1 for l in out.splitlines()
+                    if l.startswith(("  ▶ [", "  · [", "  ⏳ [", "  ⛔ [", "  ✓ [")))
+        if "Next: " not in out:
+            break
+        page += 1
+    return page, seen, silent, multi
+
+
+def test_pagination_never_loses_an_item_and_never_breaches_silently(tmp_path):
+    store = tmp_path / "s.json"
+    for n in range(40):
+        _run([CLI, "add", f"Item {n} " + "padding " * (n % 7)], store, "2026-08-31")
+    for budget in (600, 1200, 4000, 26000):
+        pages, seen, silent, multi = _walk_pages(store, [], budget)
+        assert seen == 40, f"budget {budget} lost items ({seen} of 40)"
+        assert silent == 0, f"budget {budget} breached its ceiling without saying so"
+        assert multi == 0, f"budget {budget} put several items on an over-budget page"
+
+
+def test_a_page_carries_at_least_one_whole_item_even_under_an_absurd_budget(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "A" * 400], store, "2026-08-31")
+    out = _run([CLI, "list", "--max-chars", "1"], store, "2026-08-31").stdout
+    assert "[a" in out or "AAAA" in out, "the item must still ship -- never unreachable"
+    assert "could not be honoured" in out, "and the breach must be stated, not hidden"
+
+
+def test_limit_and_page_and_the_next_page_command(tmp_path):
+    store = tmp_path / "s.json"
+    for n in range(10):
+        _run([CLI, "add", f"Item {n}"], store, "2026-08-31")
+    p1 = _run([CLI, "list", "--limit", "4"], store, "2026-08-31").stdout
+    assert p1.count("] Item ") == 4
+    assert "Showing 1-4 of 10." in p1
+    assert "--limit 4 --page 2" in p1, "the footer gives the exact next-page command"
+    p3 = _run([CLI, "list", "--limit", "4", "--page", "3"], store, "2026-08-31").stdout
+    assert p3.count("] Item ") == 2 and "Showing 9-10 of 10." in p3
+    assert "Next: " not in p3
+    past = _run([CLI, "list", "--limit", "4", "--page", "9"], store, "2026-08-31").stdout
+    assert "past the end" in past and "10 item(s)" in past
+
+
+def test_a_split_section_is_marked_continued(tmp_path):
+    store = tmp_path / "s.json"
+    for n in range(6):
+        _run([CLI, "add", f"Item {n}"], store, "2026-08-31")
+    p2 = _run([CLI, "list", "--limit", "3", "--page", "2"], store, "2026-08-31").stdout
+    assert "(continued)" in p2, "a page must not be mistaken for the whole group"
+
+
+def test_all_removes_both_limits(tmp_path):
+    store = tmp_path / "s.json"
+    for n in range(10):
+        _run([CLI, "add", f"Item {n}"], store, "2026-08-31")
+    out = _run([CLI, "list", "--all"], store, "2026-08-31").stdout
+    assert out.count("] Item ") == 10 and "Showing" not in out
+
+
+def test_json_is_never_paginated(tmp_path):
+    store = tmp_path / "s.json"
+    for n in range(10):
+        _run([CLI, "add", f"Item {n}"], store, "2026-08-31")
+    j = json.loads(_run([CLI, "list", "--json", "--limit", "2", "--max-chars", "50"],
+                        store, "2026-08-31").stdout)
+    assert len(j["items"]) == 10, "silently paginated JSON would not be a contract"
+
+
+def test_banner_marks_waiting_items_and_names_their_target(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    banner = json.loads(_run([HOOK], store, "2026-08-31").stdout)["systemMessage"]
+    assert "⏳" in banner
+    # The target is shown even in the banner: "parked, but on what" is the whole question.
+    assert "decide-the-matrix @ the matrix is decided" in banner
+    # Counted SEPARATELY from gated -- gated needs the reader to act, waiting needs nobody, so
+    # merging them would tell the reader they owe an answer they do not owe.
+    assert "1 waiting on another item" in banner and "nothing for you to do" in banner
+
+
+def test_banner_flags_a_waiting_item_whose_target_already_landed(tmp_path):
+    store = tmp_path / "s.json"
+    _seed_tiers(store)
+    raw = json.loads(store.read_text())
+    for i in raw["items"]:
+        if i["id"] == "decide-the-matrix":
+            i["done"] = True          # drift: closed without going through `done`
+    store.write_text(json.dumps(raw))
+    banner = json.loads(_run([HOOK], store, "2026-08-31").stdout)["systemMessage"]
+    assert "can move NOW" in banner and "resolve" in banner
+
+
+def test_banner_says_nothing_about_waiting_when_there_is_none(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Just a thing"], store, "2026-08-31")
+    banner = json.loads(_run([HOOK], store, "2026-08-31").stdout)["systemMessage"]
+    assert "waiting" not in banner and "⏳" not in banner

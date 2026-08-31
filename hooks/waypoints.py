@@ -81,8 +81,15 @@ try:
         except Exception:
             pass
 
-    items = c.surfaceable(c.load_store().get("items", []), c.today())
-    banner = c.format_banner(items)
+    all_items = c.load_store().get("items", [])
+    items = c.surfaceable(all_items, c.today())
+    # all_items (plus the archive) is the universe for resolving a waiting target -- see
+    # format_banner. `items` alone would make every landed target look like a missing one.
+    try:
+        archived = c.load_archive().get("items", [])
+    except Exception:
+        archived = []
+    banner = c.format_banner(items, all_items=all_items, archived=archived)
     if banner:
         model_note = banner + (
             "\n(These are the user's persistent open items. The user manages them by talking to "
