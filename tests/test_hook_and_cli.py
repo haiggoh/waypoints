@@ -1196,3 +1196,37 @@ def test_banner_says_nothing_about_waiting_when_there_is_none(tmp_path):
     _run([CLI, "add", "Just a thing"], store, "2026-08-31")
     banner = json.loads(_run([HOOK], store, "2026-08-31").stdout)["systemMessage"]
     assert "waiting" not in banner and "⏳" not in banner
+
+
+def test_waiting_on_is_repeatable_on_the_command_line(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Target A"], store, "2026-09-01")
+    _run([CLI, "add", "Target B"], store, "2026-09-01")
+    _run([CLI, "add", "Dependent"], store, "2026-09-01")
+    r = _run([CLI, "triage", "dependent", "--tier", "waiting",
+              "--waiting-on", "target-a @ its API freezes",
+              "--waiting-on", "target-b @ the matrix is decided"], store, "2026-09-01")
+    assert r.returncode == 0
+    assert "target-a @ its API freezes + target-b @ the matrix is decided" in r.stdout
+    j = json.loads(_run([CLI, "list", "--json"], store, "2026-09-01").stdout)
+    dep = [i for i in j["items"] if i["id"] == "dependent"][0]
+    assert dep["waiting_on"] == ["target-a @ its API freezes",
+                                 "target-b @ the matrix is decided"]
+    # Closing ONE of the two must not release it.
+    _run([CLI, "done", "target-a"], store, "2026-09-01")
+    j = json.loads(_run([CLI, "list", "--json"], store, "2026-09-01").stdout)
+    assert [i for i in j["items"] if i["id"] == "dependent"][0]["tier"] == "waiting"
+    r = _run([CLI, "done", "target-b"], store, "2026-09-01")
+    assert "released 1 item(s)" in r.stdout
+
+
+def test_compact_list_shows_every_target_of_a_multi_target_wait(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Target A"], store, "2026-09-01")
+    _run([CLI, "add", "Target B"], store, "2026-09-01")
+    _run([CLI, "add", "Dependent"], store, "2026-09-01")
+    _run([CLI, "triage", "dependent", "--tier", "waiting",
+          "--waiting-on", "target-a @ freeze", "--waiting-on", "target-b @ decide"],
+         store, "2026-09-01")
+    out = _run([CLI, "list"], store, "2026-09-01").stdout
+    assert "target-a @ freeze + target-b @ decide" in out

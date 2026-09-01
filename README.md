@@ -205,7 +205,13 @@ the tier and the target **together**, or the prose is lost in between.
 
 ```
 waypoints.py triage launcher-phase-3 --tier waiting \
-    --waiting-on "lean-capability-profiles @ the matrix is decided"
+    --waiting-on "joyia-mcp-scope-migration @ resolved"
+
+# --waiting-on is REPEATABLE; the item then releases only when ALL of them land
+waypoints.py triage claude-mem-pilot --tier waiting \
+    --waiting-on "global-claude-md @ the duplication map exists" \
+    --waiting-on "tool-output-filtering @ a bounded tool-result path"
+
 waypoints.py list --waiting
 waypoints.py resolve
 ```
@@ -216,7 +222,13 @@ item **itself**. Blocks that need a person, a recurring world condition, or an e
 share no such mechanism, so they stay prefixes inside `gated` — a shared state that carried no
 shared behaviour would be a label pretending to be a mechanism.
 
-- The milestone is **required**. `"<item-id> @ <milestone>"` — because *"when that item is done"*
+- **Several targets are allowed, and release requires all of them.** An item blocked on two
+  things is not freed by one of them. Conversely a single *missing* target makes the whole spec
+  stale rather than partly satisfied: the store then disagrees with itself, and no partial answer
+  is trustworthy. This is not a hypothetical shape — of the first fifteen real items migrated into
+  this tier, three waited on two-to-four others at once, so a single-target field would have meant
+  either guessing which dependency binds last or leaving a fifth of the pile behind.
+- The milestone is **required**, for every target. `"<item-id> @ <milestone>"` — because *"when that item is done"*
   is frequently not the actual trigger; often you are waiting on a specific point partway through.
   A bare id is refused, and so is a `waiting` item with no target at all.
 - **Closing a target releases its dependents automatically**, to `untriaged` — never to a guessed

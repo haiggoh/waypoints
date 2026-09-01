@@ -510,15 +510,35 @@ class VerdictError(ValueError):
     waiting target on an item that is waiting."""
 
 
+def normalize_waiting_on(waiting_on):
+    """Coerce a target spec to a LIST of '<item-id> @ <milestone>' strings.
+
+    A single string is accepted for convenience and stored as a one-element list, so the field has
+    exactly one shape on disk. Multiple targets are a real case, not a hypothetical: of the first
+    fifteen items migrated into this tier, three waited on two-to-four other items at once, so a
+    single-target field would have forced either an ungroundable guess about which dependency
+    binds last, or leaving a fifth of the pile unmigrated."""
+    if waiting_on is None or waiting_on == "":
+        return []
+    if isinstance(waiting_on, str):
+        return [waiting_on]
+    return [w for w in waiting_on if w]
+
+
 def parse_waiting_on(waiting_on):
-    """Split '<item-id> @ <milestone>' into (id, milestone). Raises VerdictError if it does not
-    carry both halves, so a target can never degrade into unparseable prose."""
-    m = WAITING_ON_RE.match(waiting_on or "")
-    if not m:
-        raise VerdictError(
-            "a waiting target must read '<item-id> @ <milestone>' (got %r). The milestone is "
-            "required: 'when that item is done' is often not the trigger." % (waiting_on,))
-    return m.group("id"), m.group("milestone")
+    """Every target as (id, milestone). Raises VerdictError if any entry lacks both halves, so a
+    target can never degrade into unparseable prose."""
+    out = []
+    for entry in normalize_waiting_on(waiting_on):
+        m = WAITING_ON_RE.match(entry)
+        if not m:
+            raise VerdictError(
+                "a waiting target must read '<item-id> @ <milestone>' (got %r). The milestone is "
+                "required: 'when that item is done' is often not the trigger." % (entry,))
+        out.append((m.group("id"), m.group("milestone")))
+    if not out:
+        raise VerdictError("a waiting target cannot be empty")
+    return out
 
 
 def validate_verdict(tier, gate_reason=None, waiting_on=None):
@@ -543,7 +563,7 @@ def validate_verdict(tier, gate_reason=None, waiting_on=None):
             "tier is that the store can re-check the target itself" % (WAITING,))
     if waiting_on:
         parse_waiting_on(waiting_on)
-    return tier, gate_reason, waiting_on
+    return tier, gate_reason, normalize_waiting_on(waiting_on) or None
 
 
 def tier_of(item):
@@ -611,7 +631,7 @@ def set_verdict(items, item_id, tier=_UNSET, gate_reason=_UNSET, waiting_on=_UNS
     if new_tier is None:
         new_reason = None
         new_waiting = None
-    validate_verdict(new_tier, new_reason, new_waiting)
+    _t, _g, new_waiting = validate_verdict(new_tier, new_reason, new_waiting)
     # Absent, not null: a cleared verdict removes the keys so the item is byte-identical to
     # one that was never triaged. Anything else would leak a tombstone into the store.
     for key, val in (("tier", new_tier), ("gate_reason", new_reason),
@@ -634,22 +654,52 @@ WAITING_LANDED = "landed"      # the target is done (or archived as done) -> pro
 WAITING_STALE = "stale"        # the target id is nowhere to be found -> warn, never guess
 
 
-def waiting_status(item, items, archived=()):
-    """Where a waiting item's target stands: (status, target_id, milestone).
-
-    A target that is DONE releases the item. A target that does not exist at all is `stale`
-    rather than landed — an id that was renamed or removed must never silently satisfy a
-    dependency, because that is indistinguishable from the work having happened."""
+def waiting_targets(item, items, archived=()):
+    """Per-target detail: [(target_id, milestone, status)]. [] if the spec is unparseable."""
     try:
-        target_id, milestone = parse_waiting_on(item.get("waiting_on"))
+        pairs = parse_waiting_on(item.get("waiting_on"))
     except VerdictError:
+        return []
+    out = []
+    for target_id, milestone in pairs:
+        target = get_item(items, target_id) or get_item(list(archived), target_id)
+        if target is None:
+            st = WAITING_STALE
+        elif target.get("done"):
+            st = WAITING_LANDED
+        else:
+            st = WAITING_PENDING
+        out.append((target_id, milestone, st))
+    return out
+
+
+def waiting_status(item, items, archived=()):
+    """Where a waiting item stands overall: (status, target_id, milestone).
+
+    With several targets the item releases only when ALL of them have landed — an item blocked on
+    two things is not unblocked by one of them. Conversely a SINGLE missing target makes the whole
+    spec stale, because the store then disagrees with itself and no partial answer is trustworthy.
+
+    A target that does not exist at all is `stale` rather than landed: an id that was renamed or
+    removed must never silently satisfy a dependency, since that is indistinguishable from the
+    work having happened. The reported (target_id, milestone) is the one that EXPLAINS the verdict
+    — the offending target when stale, the first still-pending one otherwise — so a caller has
+    something specific to show rather than a bare state."""
+    detail = waiting_targets(item, items, archived)
+    if not detail:
         return WAITING_STALE, None, None
-    target = get_item(items, target_id) or get_item(list(archived), target_id)
-    if target is None:
-        return WAITING_STALE, target_id, milestone
-    if target.get("done"):
-        return WAITING_LANDED, target_id, milestone
-    return WAITING_PENDING, target_id, milestone
+    for tid, ms, st in detail:
+        if st == WAITING_STALE:
+            return WAITING_STALE, tid, ms
+    for tid, ms, st in detail:
+        if st == WAITING_PENDING:
+            return WAITING_PENDING, tid, ms
+    return WAITING_LANDED, detail[0][0], detail[0][1]
+
+
+def waiting_on_str(item):
+    """The target spec as one short human-readable line, for the banner and the compact list."""
+    return " + ".join(normalize_waiting_on(item.get("waiting_on")))
 
 
 def promote_landed_waiting(items, archived=(), today_str=None):
@@ -670,9 +720,9 @@ def promote_landed_waiting(items, archived=(), today_str=None):
         status, target_id, milestone = waiting_status(it, items, archived)
         if status != WAITING_LANDED:
             continue
-        note = ("RELEASED %s: the item this was waiting on landed — %s @ %s. Now untriaged on "
+        note = ("RELEASED %s: everything this was waiting on has landed — %s. Now untriaged on "
                 "purpose: its own weight was never assessed while it sat in `waiting`, so it "
-                "needs a verdict rather than an assumed one." % (today_str, target_id, milestone))
+                "needs a verdict rather than an assumed one." % (today_str, waiting_on_str(it)))
         it.setdefault("summary", []).append(note)
         set_verdict(items, it["id"], tier=None)
         promoted.append((it, target_id, milestone))
@@ -713,7 +763,7 @@ def add_item(items, title, detail="", surface_on=None, created=None, id=None, su
     if gate_reason:
         item["gate_reason"] = gate_reason
     if waiting_on:
-        item["waiting_on"] = waiting_on
+        item["waiting_on"] = normalize_waiting_on(waiting_on)
     items.append(item)
     return item
 
@@ -876,7 +926,7 @@ def list_payload(items, today_str=None):
       items     array  — every item, in store order, each with:
                            id, title, summary[], detail, created, surface_on, done, priority,
                            surfaceable (bool, computed), tier (str|null), gate_reason (str|null),
-                           waiting_on (str|null)
+                           waiting_on (array of "<id> @ <milestone>" strings, or null)
 
     `tier`/`gate_reason`/`waiting_on` are always PRESENT here and null when unset — a consumer
     reading a view should not have to distinguish a missing key from a null one. In the STORE
@@ -1162,7 +1212,7 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=()):
         # item is parked but not on what, which is the state that made these untraversable in
         # prose -- and it is one short line, unlike a gate reason.
         if is_waiting(i) and i.get("waiting_on"):
-            lines.append(_wrap(f"← {i['waiting_on']}", date_indent))
+            lines.append(_wrap(f"← {waiting_on_str(i)}", date_indent))
         # The date always gets its own line, hanging-indented under the title, so its
         # placement/indentation is fixed regardless of title length or pane width --
         # unlike appending it to the title line, this needs no wrap heuristics.

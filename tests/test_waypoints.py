@@ -1178,9 +1178,9 @@ def test_waiting_target_must_name_a_milestone_not_just_an_item():
     # "when that item is done" is often NOT the trigger, so the milestone is required.
     with pytest.raises(c.VerdictError):
         c.validate_verdict("waiting", waiting_on="some-item")
-    assert c.parse_waiting_on("some-item @ its API freezes") == ("some-item", "its API freezes")
+    assert c.parse_waiting_on("some-item @ its API freezes") == [("some-item", "its API freezes")]
     # Surrounding whitespace is tolerated; the two halves are not.
-    assert c.parse_waiting_on("  a-b  @   the thing  ") == ("a-b", "the thing")
+    assert c.parse_waiting_on("  a-b  @   the thing  ") == [("a-b", "the thing")]
 
 
 def test_a_waiting_target_on_a_non_waiting_item_is_refused():
@@ -1264,7 +1264,7 @@ def test_stale_waiting_reports_but_never_repairs():
     stale = c.stale_waiting(items)
     assert [(i["id"], t) for i, t in stale] == [("orphan", "ghost")]
     # Untouched: which side is wrong is not something the store can know.
-    assert items[0]["tier"] == "waiting" and items[0]["waiting_on"] == "ghost @ never"
+    assert items[0]["tier"] == "waiting" and items[0]["waiting_on"] == ["ghost @ never"]
 
 
 def test_done_items_are_not_reported_as_waiting():
@@ -1289,7 +1289,7 @@ def test_list_payload_carries_waiting_and_keeps_the_sum_honest():
             + counts["untriaged"]) == counts["open"]
     row = [r for r in p["items"] if r["id"] == "dep"][0]
     # Present-and-null at the boundary, absent in the store: the same asymmetry as tier.
-    assert row["waiting_on"] == "target @ ships"
+    assert row["waiting_on"] == ["target @ ships"]
     assert [r for r in p["items"] if r["id"] == "fresh"][0]["waiting_on"] is None
 
 
@@ -1304,3 +1304,88 @@ def test_banner_resolves_waiting_targets_against_the_whole_store_not_the_display
     display = [i for i in items if not i.get("done")]
     assert "can move NOW" not in c.format_banner(display, ungate_hint=False)
     assert "can move NOW" in c.format_banner(display, ungate_hint=False, all_items=items)
+
+
+# ---------------------------------------------------------------------------------------
+# Multiple targets. Not hypothetical: of the first fifteen real items migrated into this tier,
+# three waited on two-to-four others at once, so a single-target field would have forced either
+# an ungroundable guess about which dependency binds last, or leaving a fifth of the pile behind.
+# ---------------------------------------------------------------------------------------
+
+def test_waiting_on_is_stored_as_a_list_even_for_one_target():
+    items = []
+    c.add_item(items, "t")
+    c.add_item(items, "dep", tier="waiting", waiting_on="t @ ships")
+    assert items[1]["waiting_on"] == ["t @ ships"], "one shape on disk, always a list"
+
+
+def test_several_targets_release_only_when_ALL_have_landed():
+    items = []
+    c.add_item(items, "a")
+    c.add_item(items, "b")
+    c.add_item(items, "dep", tier="waiting",
+               waiting_on=["a @ its API freezes", "b @ the matrix is decided"])
+    assert c.waiting_status(items[2], items)[0] == c.WAITING_PENDING
+    items[0]["done"] = True
+    # One of two is NOT unblocked -- an item blocked on two things is not freed by one of them.
+    assert c.waiting_status(items[2], items)[0] == c.WAITING_PENDING
+    assert c.promote_landed_waiting(items) == []
+    items[1]["done"] = True
+    assert c.waiting_status(items[2], items)[0] == c.WAITING_LANDED
+    promoted = c.promote_landed_waiting(items, today_str="2026-09-01")
+    assert [i["id"] for i, _t, _m in promoted] == ["dep"]
+    # The release note names EVERY target, not just the one that happened to be reported.
+    note = items[2]["summary"][-1]
+    assert "a @ its API freezes" in note and "b @ the matrix is decided" in note
+
+
+def test_one_missing_target_makes_the_whole_spec_stale():
+    items = []
+    c.add_item(items, "a")
+    items[0]["done"] = True
+    c.add_item(items, "dep", tier="waiting", waiting_on=["a @ ships", "ghost @ never"])
+    status, target, _m = c.waiting_status(items[1], items)
+    # Stale dominates: the store disagrees with itself, so no partial answer is trustworthy --
+    # and it must NOT read as landed just because the surviving target happens to be done.
+    assert status == c.WAITING_STALE and target == "ghost"
+    assert [i["id"] for i, _t in c.stale_waiting(items)] == ["dep"]
+    assert c.promote_landed_waiting(items) == []
+
+
+def test_the_reported_target_explains_the_verdict():
+    items = []
+    c.add_item(items, "a")
+    c.add_item(items, "b")
+    items[0]["done"] = True
+    c.add_item(items, "dep", tier="waiting", waiting_on=["a @ done already", "b @ still open"])
+    status, target, milestone = c.waiting_status(items[2], items)
+    # The still-PENDING one is named, not the already-landed one: a caller needs something
+    # specific to show, and "a" would be actively misleading here.
+    assert (status, target, milestone) == (c.WAITING_PENDING, "b", "still open")
+
+
+def test_every_target_must_carry_a_milestone():
+    with pytest.raises(c.VerdictError):
+        c.validate_verdict("waiting", waiting_on=["good-one @ a real milestone", "bare-id"])
+
+
+def test_an_empty_target_list_is_refused():
+    with pytest.raises(c.VerdictError):
+        c.validate_verdict("waiting", waiting_on=[])
+
+
+def test_waiting_targets_reports_each_target_separately():
+    items = []
+    c.add_item(items, "a")
+    c.add_item(items, "b")
+    items[0]["done"] = True
+    c.add_item(items, "dep", tier="waiting", waiting_on=["a @ x", "b @ y", "ghost @ z"])
+    detail = c.waiting_targets(items[2], items)
+    assert [(t, st) for t, _m, st in detail] == [
+        ("a", c.WAITING_LANDED), ("b", c.WAITING_PENDING), ("ghost", c.WAITING_STALE)]
+
+
+def test_waiting_on_str_is_one_readable_line():
+    items = []
+    c.add_item(items, "dep", tier="waiting", waiting_on=["a @ x", "b @ y"])
+    assert c.waiting_on_str(items[0]) == "a @ x + b @ y"

@@ -53,7 +53,9 @@ one whole item), and a page that cannot honour its budget SAYS so instead of ove
 The `waiting` tier is blocked-on-another-item-in-this-store. It is a real tier rather than a
 prefix inside `gated` for one reason: the target is an id this store holds, so the store can
 re-check it for free and release the item itself. `--waiting-on` therefore REQUIRES a milestone
-("<item-id> @ <milestone>"), because "when that item is done" is frequently not the trigger.
+("<item-id> @ <milestone>"), because "when that item is done" is frequently not the trigger. It is
+REPEATABLE: an item may wait on several others, and then it releases only when ALL of them have
+landed, while a single missing target makes the whole spec stale rather than partly satisfied.
 Closing a target auto-releases its dependents to UNTRIAGED — never to a guessed weight, since
 their own weight was never assessed while they waited.
 
@@ -174,9 +176,9 @@ def _item_lines(i, surf, verbose, items, arch, c):
     head = f"  {flag} [{i['id']}] {title}"
     if c.is_waiting(i):
         status, target, milestone = c.waiting_status(i, items, arch)
-        arrow = f"{target or '(unparseable)'} @ {milestone or '?'}"
+        arrow = c.waiting_on_str(i) or "(unparseable)"
         if status == c.WAITING_STALE:
-            head += f"   ← ⚠️ {_trim(arrow, 60)} (no such target)"
+            head += f"   ← ⚠️ {_trim(arrow, 60)} (no such target: {target or '?'})"
         else:
             head += f"   ← {_trim(arrow, 70)}"
     if not verbose:
@@ -319,8 +321,7 @@ def _dashboard(store, items):
                                                 else ("▶" if i["id"] in surf else "·"))
             line = f"  {mark} [{i['id']}] {_trim(i.get('title', ''), 72)}"
             if c.is_waiting(i):
-                _s, target, milestone = c.waiting_status(i, items, arch)
-                line += f"   ← {_trim(f'{target} @ {milestone}', 48)}"
+                line += f"   ← {_trim(c.waiting_on_str(i), 48)}"
             print(line)
     if g["gated"]:
         print(f"\n{len(g['gated'])} gated item(s) need something from you: waypoints list --gated")
@@ -443,10 +444,13 @@ def main(argv=None):
     pv.add_argument("id")
     pv.add_argument("--tier", choices=c.TIERS, default=None,
                     help="do-now (bounded) | heavy (may sprawl) | gated (needs something first)")
-    pv.add_argument("--waiting-on", default=None, metavar="'<item-id> @ <milestone>'",
+    pv.add_argument("--waiting-on", action="append", default=None,
+                    metavar="'<item-id> @ <milestone>'",
                     help="required for --tier waiting: the item this one waits on AND the "
                          "milestone that releases it. The milestone is not optional — "
-                         "\"when that item is done\" is often not the actual trigger")
+                         "\"when that item is done\" is often not the actual trigger. "
+                         "REPEATABLE: an item can wait on several others, and then it releases "
+                         "only when ALL of them have landed")
     pv.add_argument("--gate-reason", default=None,
                     help="what this item is waiting on (only valid with --tier gated)")
     pv.add_argument("--clear", action="store_true",
@@ -484,7 +488,8 @@ def main(argv=None):
                   f"Not repaired — the store cannot know whether the target was renamed or the "
                   f"dependency was mistyped:")
             for it, target in stale:
-                print(f"      [{it['id']}] -> {target or '(unparseable)'}")
+                print(f"      [{it['id']}] -> {target or '(unparseable)'}"
+                      f"   (full spec: {c.waiting_on_str(it) or 'none'})")
         return 0
 
     if args.cmd == "list":
@@ -809,7 +814,7 @@ def main(argv=None):
         verdict = it.get("tier") or "untriaged"
         extra = f" — {it['gate_reason']}" if it.get("gate_reason") else ""
         if it.get("waiting_on"):
-            extra = f" — waiting on {it['waiting_on']}"
+            extra = f" — waiting on {c.waiting_on_str(it)}"
             status, target, _m = c.waiting_status(it, items, c.load_archive()["items"])
             if status == c.WAITING_STALE:
                 extra += "   ⚠️ no item with that id — check the target before relying on it"

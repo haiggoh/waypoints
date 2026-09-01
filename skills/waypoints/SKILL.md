@@ -26,8 +26,8 @@ updates never touch it:
 session; dated ones show on and after that date, and both persist until done.
 
 **Optional verdict fields.** An item may also carry `tier` (`do-now` | `heavy` | `gated` |
-`waiting`) and, when gated, `gate_reason`; when waiting, `waiting_on` of the shape
-`"<item-id> @ <milestone>"`. Both are **absent unless set** — an untriaged item has neither key, so nothing
+`waiting`) and, when gated, `gate_reason`; when waiting, `waiting_on` — a LIST of
+`"<item-id> @ <milestone>"` strings (one shape on disk, even for a single target). Both are **absent unless set** — an untriaged item has neither key, so nothing
 written before verdicts existed needs migrating, and `untriaged` stays a real third state rather
 than a silent synonym for "actionable". An item nobody has assessed is not thereby known to be
 unblocked.
@@ -78,7 +78,8 @@ waypoints.py list                    # ONE LINE per item, grouped; --verbose res
 waypoints.py list --gated|--waiting|--actionable|--untriaged [--open]   # symmetric views
 waypoints.py list [--limit N] [--page N] [--max-chars N] [--all]        # bounded output
 waypoints.py triage <id> --tier do-now|heavy|gated|waiting
-                 [--gate-reason "…"] [--waiting-on "<id> @ <milestone>"] | --clear
+                 [--gate-reason "…"] [--waiting-on "<id> @ <milestone>"]... | --clear
+                 # --waiting-on is REPEATABLE; releases only when ALL targets land
 waypoints.py resolve                 # release waiting items whose target landed
 waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on YYYY-MM-DD]
 waypoints.py edit <id> [--title "…"] [--add-point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on]
@@ -133,7 +134,9 @@ actionable. Write the reason as *the thing that would unblock it*, not as a rest
 **Blocked on another ITEM, not on a person?** Use `--tier waiting --waiting-on "<id> @ <milestone>"`
 instead of `gated`. It is the one block this store can clear by itself: closing the target releases
 the dependent automatically (to `untriaged`, since its own weight was never assessed while it
-waited). Give the milestone — "when that item is done" is often not the real trigger. Do NOT also
+waited). Give the milestone — "when that item is done" is often not the real trigger. Repeat `--waiting-on`
+if it waits on more than one item; it then releases only when they have ALL landed, and one missing
+target makes the whole spec stale rather than partly satisfied. Do NOT also
 leave a `WAIT:` prefix in a gate reason afterwards: that is two records of one fact, and the store
 refuses a gate reason on a non-gated item anyway, so a half-migration silently drops the prose.
 Move tier and target in the SAME call. Past a few gated items the banner
