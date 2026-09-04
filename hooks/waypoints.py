@@ -81,7 +81,28 @@ try:
         except Exception:
             pass
 
-    all_items = c.load_store().get("items", [])
+    try:
+        all_items = c.load_store().get("items", [])
+    except c.StoreCorrupt as e:
+        # A corrupt store used to read as empty here, so the banner just VANISHED — the most
+        # alarming possible state produced the least alarming output. Say it loudly instead,
+        # to the user AND to the model, and exit 0 (never block a session).
+        alarm = ("🧭 waypoints: THE STORE IS UNREADABLE — the open-items banner is missing "
+                 "because the file could not be parsed, NOT because there is nothing open.\n"
+                 + e.report())
+        print(json.dumps({
+            "systemMessage": alarm,
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": (
+                    alarm + "\n(Tell the user their waypoints store is damaged and offer to run "
+                    "`waypoints.py recover` in a Bash tool — it puts the newest backup that "
+                    "parses back in place and journals the event. Do NOT hand-edit or "
+                    "hand-repair the JSON, and do NOT add/close items until it is recovered: "
+                    "the first write would make the loss canonical.)"),
+            }
+        }))
+        sys.exit(0)
     items = c.surfaceable(all_items, c.today())
     # all_items (plus the archive) is the universe for resolving a waiting target -- see
     # format_banner. `items` alone would make every landed target look like a missing one.
@@ -92,6 +113,12 @@ try:
     banner = c.format_banner(items, all_items=all_items, archived=archived)
     if banner:
         model_note = banner + (
+            # RULE ZERO, first because a model that decides the JSON is easier never reads as
+            # far as the CLI usage below. 2026-09-03: one hand-edit made every item unreadable.
+            "\nNEVER hand-edit ~/.claude/waypoints.json (or waypoints-archive.json). Every "
+            "change goes through `waypoints.py`. One bad escape makes the WHOLE file unparseable, "
+            "so all items are lost at once, not one. If the file already looks broken, do not fix "
+            "it by hand — run `waypoints.py recover`."
             "\n(These are the user's persistent open items. The user manages them by talking to "
             "you — they do NOT type a console command; you add and close them on their behalf. When "
             "one is genuinely finished, close it with `waypoints.py done <id>` in a Bash tool (the "

@@ -258,6 +258,11 @@ Triaging is entirely optional — leave it alone and the plugin behaves exactly 
 
 ## Store
 
+**Never hand-edit this file.** Every change goes through `waypoints.py`. It is one JSON document,
+so a single botched escape makes `json.load` fail for the **whole** file and *every* item becomes
+unreadable at once — not the one you were editing. If it is already broken, don't repair it by
+hand either: run `waypoints.py recover`.
+
 `~/.claude/waypoints.json` (override with `$WAYPOINTS_FILE`). It lives **outside** the
 plugin so updates/reinstalls never touch your data.
 
@@ -300,6 +305,67 @@ addition, `"after": null` a removal, and `"moved": [from, to]` a pure reordering
 a missing key from a null one. `gated + actionable + untriaged == open` — check it and you know
 nothing was dropped. Filtered views add `"view"` and narrow `items`, but `counts` keep describing the
 whole store.
+
+## When the store is unreadable
+
+A corrupt store used to read as **zero items**: the banner vanished silently, and the next write
+made that emptiness canonical. It now **refuses**, tells you what broke, and names the way out:
+
+```
+⛔ the waypoints store is unreadable — REFUSING to operate on it.
+   store:  /Users/you/.claude/waypoints.json
+   reason: JSONDecodeError: Expecting ',' delimiter: line 2850 column 19
+   the damaged file was COPIED to (kept out of the rotating backup ring, so it cannot age out):
+           /Users/you/.claude/waypoints.json.corrupt-20260904-113015
+   newest VALID backup: …/waypoints-backups/waypoints.20260904-104112-882301-000.json  (117 items)
+   recover with:  waypoints.py recover        # uses that backup
+                  waypoints.py recover --list # see all candidates
+   Nothing was changed. Never hand-edit this file: every change goes through waypoints.py.
+```
+
+```sh
+waypoints.py recover --list        # the backups that actually PARSE, newest first
+waypoints.py recover               # put the newest valid one back, and journal it
+waypoints.py recover --from PATH   # choose a different snapshot
+```
+
+Three properties worth knowing:
+
+- **Nothing is written while the store is broken.** The CLI exits 2 and leaves the file alone, so
+  a damaged store cannot be quietly replaced by an empty one.
+- **The recovery is journalled.** A plain `cp` leaves no trace in `waypoints-journal.jsonl` (which
+  records commands), so "the store went backwards" was invisible in its own history. `recover` is
+  the sanctioned path precisely because it records itself.
+- **The evidence outlives the ring.** The damaged file is copied next to the store, where the
+  10-deep retention sweep cannot reach it — a busy day of writes had already evicted the real
+  incident's snapshot before it could be examined.
+- **`journal` still works** while the store is unreadable; it is a separate append-only file.
+
+A *missing* store is a first run, not corruption. Only one of those means "stop and recover".
+
+## Pinning: "heavy, but do it now anyway"
+
+Tier ordering **dominates** priority — a consumer works the do-now pile before anything heavy — so
+raising the number on a heavy item does nothing but reorder it *within* its tier. That left the one
+thing a user actually wants to say ("this heavy item, today") with no field to live in, only a prose
+note no mechanism can see.
+
+```sh
+waypoints.py pin big-thing --because "user wants it today; the tier order would bury it"
+waypoints.py unpin big-thing
+```
+
+- **The reason is required.** A pin overrules an honest verdict, so an unexplained one is
+  indistinguishable from a mistake a month later.
+- **The tier is left alone.** A pinned heavy item stays heavy. A pin changes *when* it runs, never
+  the assessment of how big it is — fudging the verdict for scheduling reasons is the failure this
+  field exists to prevent.
+- **It outranks priority rather than being a big number,** so a pin can't be silently out-bid by
+  priority inflation elsewhere.
+- Pinned items get their own top section in `list`, are marked 📌 in the banner **with the reason**
+  (even in compact mode), and are never collapsed into the "N gated" count.
+- In `list --json` (contract 3) they carry `pinned` / `pin_reason`, plus a `pinned` count. Pinned is
+  **orthogonal** to the tiers, not a fifth one, so the tier sum invariant is unchanged.
 
 ## Install
 

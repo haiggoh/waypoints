@@ -20,15 +20,50 @@ would cite.
 
 _Nothing yet._
 
-## [Unreleased] - 2026-09-01
+## [0.7.0] — 2026-09-04
 
 ### Added
-- `waiting` items can hold multiple targets via `--waiting-on "<id> @ <milestone>"`, now repeatable
+- **`recover`** — the sanctioned file-level repair when the store itself is unreadable. Puts the
+  newest backup that actually **parses** back in place (`--list` to see the candidates, `--from` to
+  choose one), keeps the replaced file, and **journals** the event. Recovering over a *readable*
+  store requires `--yes`, because that is the case that discards live data.
+- **`pin <id> --because "…"` / `unpin`** — the machine-visible "heavy, but do it now anyway".
+  Tier ordering dominates priority, so a heavy item a user wants done today previously had no
+  field to say so, only a prose note no mechanism could see. A pin outranks the tier order and
+  sorts ahead of priority; the **reason is required**, and the **tier is left alone** — a pin
+  changes when an item runs, never the assessment of how big it is. Pinned items render as their
+  own top section in `list`, are marked 📌 in the banner (with the reason, even in compact mode),
+  and are never collapsed into the "N gated" count.
+- `waiting` items can hold multiple targets via a repeatable `--waiting-on "<id> @ <milestone>"`
+  (committed 2026-09-01, unreleased until now): `waiting_on` is always a list, release requires
+  **all** targets to land, a single missing target makes the whole spec stale (and stale dominates
+  landed), and `waiting_status` reports the target that explains the verdict — the offending one
+  when stale, the first pending one otherwise.
 
 ### Changed
-- `waiting_on` is always a list of targets; release requires **all** to land
-- A single missing target makes the whole spec stale, and stale dominates landed
-- `waiting_status` reports the target that explains its verdict (offending when stale, first pending otherwise); release notes name every target
+- **A corrupt store is now REFUSED instead of read as empty.** `load_store` raises `StoreCorrupt`;
+  the CLI prints what broke, where the damaged bytes were preserved and which backup to recover
+  from, then exits 2 **without writing**. Previously an unparseable store read as zero items and
+  the next write made that emptiness canonical — data loss by default (this is what happened on
+  2026-09-03). A *missing* store is still a first run, not corruption: the two are now distinct.
+- **The SessionStart banner is loud about it.** A corrupt store used to make the banner vanish
+  silently — the most alarming state producing the least alarming output. It now emits an explicit
+  "THE STORE IS UNREADABLE" notice to both the user and the model, still exits 0, and never blocks
+  a session.
+- **Corruption evidence is kept OUT of the rotating backup ring.** The damaged file is copied to
+  `<store>.corrupt-<stamp>` beside the store, where retention cannot reach it; the 10-deep ring
+  had already evicted the 2026-09-03 evidence before it could be examined. Repeated reads of one
+  corrupt file reuse the existing copy rather than littering.
+- **`LIST_CONTRACT` 2 → 3**: adds `pinned` / `pin_reason` per item and a `pinned` count. Additive —
+  the tier sum invariant is unchanged, because pinned is orthogonal to the tiers rather than a
+  fifth one. The bump is there because the field carries an **ordering rule** a consumer must
+  honour to be correct, which cannot be discovered from the shape.
+
+### Documentation
+- **"Never hand-edit the store" is now rule zero**, stated first in the skill, the injected banner
+  context, the CLI `--help` and the core module — with the one-line reason (the file is one JSON
+  document, so a botched escape makes *every* item unreadable, not one). Verified by dispatching
+  the rule text to a non-Claude local model, which reached for the CLI rather than the file.
 
 ## [0.6.0] — 2026-08-31
 

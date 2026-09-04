@@ -1282,7 +1282,7 @@ def test_list_payload_carries_waiting_and_keeps_the_sum_honest():
     c.add_item(items, "blocked", tier="gated", gate_reason="needs you")
     c.add_item(items, "fresh")
     p = c.list_payload(items)
-    assert p["contract"] == 2
+    assert p["contract"] == 3
     counts = p["counts"]
     assert counts["waiting"] == 1
     assert (counts["gated"] + counts["waiting"] + counts["actionable"]
@@ -1389,3 +1389,191 @@ def test_waiting_on_str_is_one_readable_line():
     items = []
     c.add_item(items, "dep", tier="waiting", waiting_on=["a @ x", "b @ y"])
     assert c.waiting_on_str(items[0]) == "a @ x + b @ y"
+
+
+# ---- 0.7.0: the store refuses to read a corrupt file as "empty" ----
+
+def _store(tmp_path, monkeypatch, text=None):
+    p = tmp_path / "s.json"
+    if text is not None:
+        p.write_text(text)
+    monkeypatch.setenv("WAYPOINTS_FILE", str(p))
+    return p
+
+
+def test_a_missing_store_is_a_first_run_not_corruption(tmp_path, monkeypatch):
+    # The distinction IS the feature: only one of the two means "stop and recover".
+    _store(tmp_path, monkeypatch)
+    assert c.load_store()["items"] == []
+
+
+def test_a_corrupt_store_raises_instead_of_reading_as_empty(tmp_path, monkeypatch):
+    p = _store(tmp_path, monkeypatch, "{ not json ")
+    with pytest.raises(c.StoreCorrupt) as ei:
+        c.load_store()
+    assert ei.value.path == str(p)
+
+
+def test_a_wrong_shaped_store_is_corruption_too(tmp_path, monkeypatch):
+    # Valid JSON is not enough: a list, or a dict without `items`, is not a store.
+    _store(tmp_path, monkeypatch, '["just", "a", "list"]')
+    with pytest.raises(c.StoreCorrupt):
+        c.load_store()
+
+
+def test_non_strict_load_still_fails_safe(tmp_path, monkeypatch):
+    # save_store's before-image needs this: writing valid data over a broken file must work.
+    _store(tmp_path, monkeypatch, "{ not json ")
+    assert c.load_store(strict=False)["items"] == []
+
+
+def test_corrupt_bytes_are_quarantined_OUTSIDE_the_rotating_ring(tmp_path, monkeypatch):
+    # The 2026-09-03 evidence aged out of the 10-deep ring before it could be examined, so a
+    # corruption copy must live where retention cannot reach it.
+    p = _store(tmp_path, monkeypatch, "{ not json ")
+    with pytest.raises(c.StoreCorrupt) as ei:
+        c.load_store()
+    q = ei.value.quarantine
+    assert q and os.path.exists(q)
+    assert open(q).read() == "{ not json "
+    assert c.backup_dir(str(p)) not in q
+    assert not re.match(c._BACKUP_RE, os.path.basename(q))
+
+
+def test_quarantine_does_not_litter_a_copy_per_read(tmp_path, monkeypatch):
+    p = _store(tmp_path, monkeypatch, "{ not json ")
+    first = c.quarantine_corrupt(str(p))
+    second = c.quarantine_corrupt(str(p))
+    assert first == second
+
+
+def test_valid_backups_skips_the_ones_that_do_not_parse(tmp_path, monkeypatch):
+    p = _store(tmp_path, monkeypatch)
+    c.save_store({"version": 1, "items": [{"id": "one", "title": "One"}]}, str(p))
+    c.save_store({"version": 1, "items": [{"id": "one", "title": "One"},
+                                          {"id": "two", "title": "Two"}]}, str(p))
+    d = c.backup_dir(str(p))
+    # A snapshot taken AFTER the damage is itself damaged; "newest" alone would pick it.
+    junk = os.path.join(d, "%s.20990101-000000-000000-000.json" % c._backup_stem(str(p)))
+    open(junk, "w").write("{ broken ")
+    cands = c.valid_backups(str(p))
+    assert junk not in [path for path, _n in cands]
+    assert cands and cands[0][1] == 1  # newest VALID snapshot held one item
+
+
+def test_recover_store_puts_a_valid_backup_back_and_journals_it(tmp_path, monkeypatch):
+    p = _store(tmp_path, monkeypatch)
+    items = []
+    c.add_item(items, "Keep me")
+    c.save_store({"version": 1, "items": items}, str(p))
+    c.save_store({"version": 1, "items": []}, str(p))  # the "wipe"
+    used, n, quarantined = c.recover_store(path=str(p))
+    assert n == 1 and c.load_store(str(p))["items"][0]["title"] == "Keep me"
+    assert used and quarantined
+    # A file-level cp leaves no trace; the sanctioned path must be visible in the history.
+    assert any("recover" in " ".join(e.get("argv") or []) for e in c.read_journal(store=str(p)))
+
+
+def test_recover_refuses_when_there_is_no_valid_backup(tmp_path, monkeypatch):
+    p = _store(tmp_path, monkeypatch, "{ not json ")
+    with pytest.raises(FileNotFoundError):
+        c.recover_store(path=str(p))
+
+
+def test_the_refusal_report_names_the_backup_and_the_command(tmp_path, monkeypatch):
+    p = _store(tmp_path, monkeypatch)
+    # TWO saves: a snapshot captures the file's PREVIOUS content, so the store must already
+    # hold the item before the write that snapshots it.
+    c.save_store({"version": 1, "items": [{"id": "a", "title": "A"}]}, str(p))
+    c.save_store({"version": 1, "items": [{"id": "a", "title": "A"}]}, str(p))
+    open(str(p), "w").write("{ broken ")
+    with pytest.raises(c.StoreCorrupt) as ei:
+        c.load_store()
+    r = ei.value.report()
+    assert "REFUSING" in r and "recover" in r and ei.value.newest_backup in r
+
+
+# ---- 0.7.0: pinned — "heavy, but do it now anyway" ----
+
+def test_pinning_requires_a_reason():
+    items = []
+    c.add_item(items, "Big thing", tier="heavy")
+    with pytest.raises(ValueError):
+        c.set_pinned(items, items[0]["id"], True)
+    with pytest.raises(ValueError):
+        c.set_pinned(items, items[0]["id"], True, "   ")
+
+
+def test_pinning_leaves_the_tier_alone():
+    # The whole design rests on verdicts not being fudged for scheduling reasons.
+    items = []
+    c.add_item(items, "Big thing", tier="heavy")
+    c.set_pinned(items, items[0]["id"], True, "user wants it today")
+    assert items[0]["tier"] == "heavy" and c.is_pinned(items[0])
+
+
+def test_unpinning_clears_both_fields():
+    items = []
+    c.add_item(items, "Big thing", tier="heavy")
+    c.set_pinned(items, items[0]["id"], True, "today")
+    c.set_pinned(items, items[0]["id"], False)
+    assert "pinned" not in items[0] and "pin_reason" not in items[0]
+
+
+def test_pinned_outranks_priority_rather_than_being_a_big_number():
+    items = []
+    c.add_item(items, "loud", tier="do-now")
+    c.add_item(items, "pinned one", tier="heavy")
+    c.set_priority(items, items[0]["id"], 9999)
+    c.set_pinned(items, items[1]["id"], True, "user override")
+    assert [i["title"] for i in c.surfaceable(items, "2026-09-04")][0] == "pinned one"
+
+
+def test_pinned_is_orthogonal_so_the_partition_sum_is_unchanged():
+    items = []
+    c.add_item(items, "a", tier="heavy")
+    c.add_item(items, "b", tier="gated", gate_reason="needs you")
+    c.set_pinned(items, items[0]["id"], True, "today")
+    g = c.partition(items)
+    assert (len(g["actionable"]) + len(g["waiting"]) + len(g["gated"])
+            + len(g["untriaged"])) == len(items)
+    assert items[0] in g["actionable"]  # still counted by its own tier
+
+
+def test_split_pinned_lifts_them_out_for_display_only():
+    items = []
+    c.add_item(items, "a", tier="heavy")
+    c.add_item(items, "b", tier="do-now")
+    c.set_pinned(items, items[0]["id"], True, "today")
+    pinned, rest = c.split_pinned(items)
+    assert [i["title"] for i in pinned] == ["a"] and [i["title"] for i in rest] == ["b"]
+
+
+def test_banner_shows_the_pin_reason_even_in_compact_mode():
+    items = []
+    for n in range(c.COMPACT_THRESHOLD + 2):
+        c.add_item(items, "filler %d" % n, tier="do-now")
+    c.add_item(items, "the pinned one", tier="heavy")
+    c.set_pinned(items, items[-1]["id"], True, "user wants it today")
+    b = c.format_banner(c.surfaceable(items, "2026-09-04"), ungate_hint=False)
+    flat = " ".join(b.split())  # the banner hard-wraps; assert on content, not line breaks
+    assert "📌" in flat and "user wants it today" in flat
+
+
+def test_a_pinned_gated_item_is_never_collapsed_into_the_count():
+    items = []
+    for n in range(c.GATED_COLLAPSE_THRESHOLD + 2):
+        c.add_item(items, "gated %d" % n, tier="gated", gate_reason="needs you")
+    c.set_pinned(items, items[0]["id"], True, "answer this one first")
+    b = c.format_banner(c.surfaceable(items, "2026-09-04"), ungate_hint=False)
+    assert "gated 0" in b  # listed in place, not hidden behind "N gated"
+
+
+def test_list_payload_carries_the_pin_and_counts_it():
+    items = []
+    c.add_item(items, "a", tier="heavy")
+    c.set_pinned(items, items[0]["id"], True, "today")
+    p = c.list_payload(items, "2026-09-04")
+    assert p["items"][0]["pinned"] is True
+    assert p["items"][0]["pin_reason"] == "today"
+    assert p["counts"]["pinned"] == 1

@@ -5,6 +5,20 @@ description: Use to manage the user's persistent open-items reminder ("waypoints
 
 # waypoints — persistent open-items reminder
 
+## Rule zero: never hand-edit the store file
+
+- NEVER open `~/.claude/waypoints.json` in an editor.
+- NEVER write it with `cat >`, `sed`, `python -c`, `jq`, or a heredoc.
+- NEVER "fix" it by hand, even when it already looks broken.
+- Make EVERY change with `waypoints.py` — `add`, `edit`, `done`, `rm`, `triage`, `reopen`.
+- Reason: the file is ONE JSON document. One bad quote makes `json.load` fail for the whole
+  file, so ALL items become unreadable at once — not the one you touched.
+- This happened on 2026-09-03. A hand-edit spliced unescaped prose into an item and the entire
+  store went unreadable.
+- If the file IS broken: run `waypoints.py recover`. It puts the newest backup that actually
+  parses back in place, keeps the damaged file, and records the recovery in the journal.
+- If a command seems awkward, run `waypoints.py --help`. Do not fall back to editing the file.
+
 A "waypoint" is a point still **ahead** of you on the journey — an unfinished task/follow-up you
 want surfaced at the start of every session **until you reach (complete) it**. Unlike Claude Code's
 native *checkpoints* (`/rewind` — an undo/restore snapshot you go *backward* to), waypoints are
@@ -15,7 +29,8 @@ native *checkpoints* (`/rewind` — an undo/restore snapshot you go *backward* t
 ## The store
 
 `~/.claude/waypoints.json` (override with `$WAYPOINTS_FILE`), a user file **outside** this plugin so
-updates never touch it:
+updates never touch it. The shape below is documentation for reading — **not** an invitation to
+write it (see rule zero); to read it programmatically use `waypoints.py list --json`:
 ```json
 { "version": 1, "items": [
   { "id": "kebab-slug", "title": "one-line headline (banner)",

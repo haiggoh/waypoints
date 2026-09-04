@@ -1,5 +1,9 @@
 """Pure, unit-testable core for the waypoints reminder.
 
+NEVER hand-edit the store JSON. Every change goes through this module (or `waypoints.py`).
+One botched escape does not damage one item — json.load then fails for the WHOLE file, and
+every item becomes unreadable at once. This happened on 2026-09-03.
+
 No Claude/session dependency. I/O helpers (load/save/archive_path/today) are thin and
 env-overridable so the hook, the CLI, and the tests all share one implementation.
 
@@ -89,20 +93,163 @@ def today():
     return os.environ.get("WAYPOINTS_TODAY") or datetime.date.today().isoformat()
 
 
-def load_store(path=None):
+class StoreCorrupt(Exception):
+    """The store file exists but is not a readable store.
+
+    Raised instead of quietly returning an empty store, because "empty" is indistinguishable
+    from "you have no waypoints" — and on 2026-09-03 that difference was a silently vanished
+    banner plus a write that would have made the emptiness canonical. Carries everything a
+    caller needs to say something useful: what broke, where the damaged bytes were preserved,
+    and which backup is the newest one that actually parses.
+    """
+
+    def __init__(self, path, reason, quarantine=None, backups=()):
+        self.path = path
+        self.reason = reason
+        self.quarantine = quarantine
+        self.backups = list(backups)
+        super().__init__("%s is not a readable waypoints store: %s" % (path, reason))
+
+    @property
+    def newest_backup(self):
+        return self.backups[0][0] if self.backups else None
+
+    def report(self):
+        """The operator-facing refusal. One screen, and it ends with the command to type."""
+        lines = ["⛔ the waypoints store is unreadable — REFUSING to operate on it.",
+                 "   store:  %s" % self.path,
+                 "   reason: %s" % self.reason]
+        if self.quarantine:
+            lines.append("   the damaged file was COPIED to (kept out of the rotating backup "
+                         "ring, so it cannot age out):")
+            lines.append("           %s" % self.quarantine)
+        if self.backups:
+            newest, n = self.backups[0]
+            lines.append("   newest VALID backup: %s  (%d item%s)"
+                         % (newest, n, "" if n == 1 else "s"))
+            lines.append("   recover with:  waypoints.py recover        # uses that backup")
+            lines.append("                  waypoints.py recover --list # see all candidates")
+        else:
+            # Still name the command. A reader told only "no backup" has nowhere to go, and the
+            # next thing an agent reaches for in that state is the editor.
+            lines.append("   NO valid backup was found in %s — check `waypoints.py recover "
+                         "--list` yourself before concluding it is gone, and do NOT overwrite "
+                         "or hand-repair the store." % backup_dir(self.path))
+        lines.append("   Nothing was changed. Never hand-edit this file: every change goes "
+                     "through waypoints.py.")
+        return "\n".join(lines)
+
+
+# Where a corrupt store is preserved. Deliberately NOT in backup_dir and NOT matching
+# _BACKUP_RE: the ring is 10 deep and one busy day of another agent's writes evicted the
+# 2026-09-03 evidence before it could be examined. A corruption copy is forensics, not a
+# convenience snapshot, so retention must never be able to reach it.
+CORRUPT_STAMP_FMT = "%Y%m%d-%H%M%S"
+
+
+def corrupt_copy_path(path=None, when=None):
+    path = path or store_path()
+    stamp = (when or datetime.datetime.now()).strftime(CORRUPT_STAMP_FMT)
+    return "%s.corrupt-%s" % (path, stamp)
+
+
+def quarantine_corrupt(path=None, when=None):
+    """Preserve the damaged bytes beside the store. Returns the copy's path, or an existing
+    copy with identical contents (so repeated reads of one corrupt file don't litter).
+
+    Never raises: preserving evidence must not become a second failure mode on top of the
+    first. A failed copy returns None and the caller still refuses to operate.
+    """
+    path = path or store_path()
+    try:
+        with open(path, "rb") as f:
+            damaged = f.read()
+        for prior in sorted(glob.glob("%s.corrupt-*" % path), reverse=True):
+            try:
+                with open(prior, "rb") as f:
+                    if f.read() == damaged:
+                        return prior
+            except OSError:
+                continue
+        dst = corrupt_copy_path(path, when)
+        n = 0
+        while os.path.exists(dst):
+            n += 1
+            dst = "%s-%03d" % (corrupt_copy_path(path, when), n)
+        with open(dst, "wb") as f:
+            f.write(damaged)
+        os.chmod(dst, 0o600)
+        return dst
+    except Exception:
+        return None
+
+
+def _validate_store(d):
+    if not isinstance(d, dict) or not isinstance(d.get("items"), list):
+        raise ValueError("not a store object (expected a dict with an \"items\" list)")
+    return d
+
+
+def valid_backups(store=None):
+    """Our snapshots of the store that actually PARSE, newest first, as (path, item_count).
+
+    "Newest" is not good enough on its own: a snapshot taken between a corrupting hand-edit
+    and the next read is itself corrupt, so the recovery target has to be chosen by validity.
+    """
+    store = store or store_path()
+    out = []
+    for _, _, p in reversed(_existing_backups(backup_dir(store), _backup_stem(store))):
+        try:
+            with open(p) as f:
+                d = _validate_store(json.load(f))
+        except Exception:
+            continue
+        out.append((p, len(d["items"])))
+    return out
+
+
+def load_store(path=None, strict=True):
+    """Read the store. `strict` (the default) RAISES StoreCorrupt on damaged content.
+
+    strict=False keeps the old fail-safe empty return, and exists for the two callers that
+    genuinely must not raise: save_store's before-image (a write of valid data must still be
+    able to land on top of a broken file) and any read whose failure mode is cosmetic.
+    """
     path = path or store_path()
     try:
         with open(path) as f:
             d = json.load(f)
-        if not isinstance(d, dict) or not isinstance(d.get("items"), list):
-            raise ValueError("bad shape")
-        return d
+        return _validate_store(d)
     except FileNotFoundError:
+        # A missing store is not corruption — it is a first run. Distinguishing the two is
+        # the whole point: only one of them means "stop and recover".
         return {"version": VERSION, "items": []}
-    except Exception:
-        # Fail safe: a corrupt store must never break a session or lose data silently to a
-        # crash. Return empty for reads; callers that write re-serialize valid data.
-        return {"version": VERSION, "items": []}
+    except Exception as e:
+        if not strict:
+            return {"version": VERSION, "items": []}
+        raise StoreCorrupt(path, "%s: %s" % (type(e).__name__, e),
+                           quarantine=quarantine_corrupt(path),
+                           backups=valid_backups(path))
+
+
+def recover_store(backup=None, path=None, argv=None):
+    """Put a valid backup back in place of an unreadable/wrong store, JOURNALLED.
+
+    A file-level `cp` leaves no trace in waypoints-journal.jsonl (which records commands), so
+    "the store went backwards" was invisible in its own history — this is the sanctioned path
+    that both restores AND records. Returns (backup_used, item_count, quarantine_path).
+    """
+    path = path or store_path()
+    if backup is None:
+        cands = valid_backups(path)
+        if not cands:
+            raise FileNotFoundError("no valid backup found in %s" % backup_dir(path))
+        backup = cands[0][0]
+    with open(backup) as f:
+        data = _validate_store(json.load(f))
+    quarantined = quarantine_corrupt(path) if os.path.exists(path) else None
+    save_store(data, path, argv=argv or ["recover", backup])
+    return backup, len(data["items"]), quarantined
 
 
 def _atomic_write(path, text):
@@ -249,7 +396,7 @@ def save_store(store, path=None, argv=None):
     parameter so tests (and any non-CLI caller) can state the command explicitly.
     """
     path = path or store_path()
-    before = load_store(path)["items"]
+    before = load_store(path, strict=False)["items"]
     _backup_before_write(path)
     _atomic_write(path, json.dumps(store, indent=2, ensure_ascii=False) + "\n")
     _journal_save(argv, before, store.get("items") or [], "store", path)
@@ -850,6 +997,50 @@ def toggle_done(items, item_id):
     return None
 
 
+def is_pinned(item):
+    return bool(item.get("pinned"))
+
+
+def set_pinned(items, item_id, pinned, reason=None):
+    """Pin/unpin an item: "heavy, but do it now anyway", made machine-visible.
+
+    The gap this closes: tier ordering DOMINATES priority (a consumer runs the do-now pile
+    before anything heavy), so a user who wants a heavy item done today had no field to say so
+    — only a prose note no mechanism could see, and the number could not express it because
+    raising priority only reorders WITHIN a tier. Pinning is deliberately NOT "priority above
+    N": a threshold overloads a sort key with a policy, and cannot record WHY.
+
+    A reason is REQUIRED, for the same reason a gated item must name its gate and a waiting item
+    its milestone: an override with no recorded rationale is indistinguishable from a mistake a
+    month later, and this one exists precisely to overrule an honest verdict.
+
+    The verdict itself is left ALONE — a pinned heavy item stays heavy. Pinning changes when it
+    runs, never the assessment of how big it is; fudging the tier for scheduling is the failure
+    this field exists to prevent.
+    """
+    it = get_item(items, item_id)
+    if it is None:
+        return None
+    if pinned:
+        if not (reason or "").strip():
+            raise ValueError("pinning requires a reason (why this outranks the tier order)")
+        it["pinned"] = True
+        it["pin_reason"] = reason.strip()
+    else:
+        it.pop("pinned", None)
+        it.pop("pin_reason", None)
+    return it
+
+
+def split_pinned(items):
+    """(pinned, rest) preserving order. Display-only: pinned is an ORTHOGONAL flag, not a fifth
+    tier, so partition() stays four-way and its sum invariant is untouched. Renderers lift the
+    pinned items out so the override is impossible to miss."""
+    pinned = [i for i in items if is_pinned(i)]
+    rest = [i for i in items if not is_pinned(i)]
+    return pinned, rest
+
+
 def set_priority(items, item_id, priority):
     """Set an item's priority (int; higher sorts earlier in the banner). Returns the item, or
     None if no such id."""
@@ -895,8 +1086,11 @@ def prune(items):
 
 def surfaceable(items, today_str):
     """Items to show now: not done, and (undated OR surface_on <= today). ISO dates sort
-    lexically, so a string <= comparison is correct. Sorted by priority descending (stable, so
-    equal-priority items keep their list/insertion order)."""
+    lexically, so a string <= comparison is correct. Sorted PINNED first, then priority
+    descending (stable, so equal-priority items keep their list/insertion order).
+
+    Pinned outranks priority rather than being a big number, so a pin can never be silently
+    out-bid by someone else's priority inflation."""
     out = []
     for i in items:
         if i.get("done"):
@@ -905,7 +1099,7 @@ def surfaceable(items, today_str):
         if so and so > today_str:
             continue
         out.append(i)
-    out.sort(key=lambda i: -i.get("priority", 0))
+    out.sort(key=lambda i: (not is_pinned(i), -i.get("priority", 0)))
     return out
 
 
@@ -913,7 +1107,7 @@ def surfaceable(items, today_str):
 # LIST_CONTRACT is versioned INDEPENDENTLY of the store's own `version`. That separation is the
 # whole point: a reader pins the output contract and the on-disk format stays free to change
 # underneath it. Documenting the raw store file instead would couple every reader to internals.
-LIST_CONTRACT = 2
+LIST_CONTRACT = 3
 
 
 def list_payload(items, today_str=None):
@@ -922,11 +1116,12 @@ def list_payload(items, today_str=None):
     Shape (contract 1):
       contract  int    — this contract's version, NOT the store's
       generated str    — the date the view was computed (surfaceability depends on it)
-      counts    object — total, open, done, surfaceable, gated, actionable, untriaged
+      counts    object — total, open, done, surfaceable, gated, actionable, untriaged, pinned
       items     array  — every item, in store order, each with:
                            id, title, summary[], detail, created, surface_on, done, priority,
                            surfaceable (bool, computed), tier (str|null), gate_reason (str|null),
-                           waiting_on (array of "<id> @ <milestone>" strings, or null)
+                           waiting_on (array of "<id> @ <milestone>" strings, or null),
+                           pinned (bool), pin_reason (str|null)
 
     `tier`/`gate_reason`/`waiting_on` are always PRESENT here and null when unset — a consumer
     reading a view should not have to distinguish a missing key from a null one. In the STORE
@@ -939,6 +1134,12 @@ def list_payload(items, today_str=None):
     because the sum invariant above CHANGED: a consumer that checked gated + actionable +
     untriaged == open would now silently fail its own audit on any store containing a waiting
     item. An additive field alone would not have justified a bump; a changed invariant does.
+
+    CONTRACT 3 (was 2) added `pinned`/`pin_reason` and a `pinned` count. Additive — the sum
+    invariant is UNCHANGED, because pinned is orthogonal to the tiers, not a fifth one: a
+    pinned item is still counted in exactly one of the four. The bump is here because the
+    field carries an ORDERING rule a consumer must honour to be correct — a pinned item runs
+    before the do-now pile despite its tier — and a consumer cannot discover that by shape.
     """
     today_str = today_str or today()
     surf = {i["id"] for i in surfaceable(items, today_str)}
@@ -959,6 +1160,8 @@ def list_payload(items, today_str=None):
             "tier": i.get("tier"),
             "gate_reason": i.get("gate_reason"),
             "waiting_on": i.get("waiting_on"),
+            "pinned": is_pinned(i),
+            "pin_reason": i.get("pin_reason"),
         })
     return {
         "contract": LIST_CONTRACT,
@@ -972,6 +1175,7 @@ def list_payload(items, today_str=None):
             "waiting": len(groups["waiting"]),
             "actionable": len(groups["actionable"]),
             "untriaged": len(groups["untriaged"]),
+            "pinned": sum(1 for i in open_items if is_pinned(i)),
         },
         "items": out,
     }
@@ -1184,9 +1388,12 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=()):
     # None = probe the machine; a bool = caller decided (tests, and any future caller that
     # already knows). Probing only when gated items will actually collapse keeps the common
     # path free of file reads.
-    gated = [i for i in items if is_gated(i)]
+    gated = [i for i in items if is_gated(i) and not is_pinned(i)]
     collapse_gated = len(gated) > GATED_COLLAPSE_THRESHOLD
-    listable = [i for i in items if not (collapse_gated and is_gated(i))] if collapse_gated else items
+    # A PINNED item is never collapsed away: the pin is an explicit user override of the
+    # ordering, so the one thing the banner must not do is hide it in a count.
+    listable = ([i for i in items if is_pinned(i) or not is_gated(i)] if collapse_gated
+                else items)
     # Cap the list at the highest-priority head; the tail becomes a count, not a silence.
     shown = listable[:BANNER_MAX_ITEMS]
     unlisted = len(listable) - len(shown)
@@ -1199,13 +1406,15 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=()):
         note += "; titles are trimmed)" if any(
             len(" ".join(i["title"].split())) > BANNER_TITLE_MAX for i in shown) else ")"
         lines.append(_wrap(note, "  "))
+    pinned_indent = "  📌 "
     bullet_indent = "  • "
     gated_indent = "  ⛔ "
     waiting_indent = "  ⏳ "
     date_indent = " " * len(bullet_indent)
     for i in shown:
         title = _short_title(i["title"]) if compact else i["title"]
-        indent = (gated_indent if is_gated(i)
+        indent = (pinned_indent if is_pinned(i)
+                  else gated_indent if is_gated(i)
                   else waiting_indent if is_waiting(i) else bullet_indent)
         lines.append(_wrap(title, indent))
         # A waiting item's TARGET is shown even in compact mode. Without it the banner says an
@@ -1213,6 +1422,12 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=()):
         # prose -- and it is one short line, unlike a gate reason.
         if is_waiting(i) and i.get("waiting_on"):
             lines.append(_wrap(f"← {waiting_on_str(i)}", date_indent))
+        # The pin REASON shows even in compact mode. A pin overrules the honest tier order, so a
+        # reader who cannot see why it outranks everything cannot judge whether it still should.
+        if is_pinned(i):
+            tier_note = f" (tier: {i['tier']})" if i.get("tier") else ""
+            lines.append(_wrap(f"📌 PINNED — do this before the do-now pile{tier_note}: "
+                               f"{i.get('pin_reason') or 'no reason recorded'}", date_indent))
         # The date always gets its own line, hanging-indented under the title, so its
         # placement/indentation is fixed regardless of title length or pane width --
         # unlike appending it to the title line, this needs no wrap heuristics.

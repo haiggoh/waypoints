@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """CLI to manage the waypoints store.
 
+NEVER hand-edit ~/.claude/waypoints.json. Every change goes through this CLI. A single botched
+escape makes json.load fail for the WHOLE file, so ALL items become unreadable at once — that
+is how the store was lost on 2026-09-03. If the file already looks broken, do not repair it by
+hand either: run `waypoints.py recover`.
+
     waypoints                            # a concise dashboard (counts, top items, what to type)
     waypoints list                       # every item, ONE LINE each, grouped by verdict
     waypoints list --verbose             # ...plus bullets, gate reasons, dates, priorities
@@ -29,8 +34,15 @@
                                          # when. Append-only and never pruned
     waypoints toggle <id>                # flip an item's done state
     waypoints priority <id> <level>      # set banner priority (int; higher shows earlier)
+    waypoints pin <id> --because "…"     # 'heavy, but do it NOW anyway' — outranks the tier
+                                         # order, which priority cannot do. Reason required.
+    waypoints unpin <id>                 # drop the override; the tier order applies again
     waypoints reorder <id> <position>    # move an item to a 0-based position in the list
     waypoints prune                      # MOVE all done items to the archive (nothing is destroyed)
+    waypoints recover [--list] [--from <backup>] [--yes]
+                                         # FILE-LEVEL repair when the store itself is unreadable:
+                                         # puts the newest backup that actually PARSES back in
+                                         # place, journals the event, and keeps the replaced file
 
 Item lifecycle: open -> done (live store, hidden from the banner) -> archived (a separate file,
 still readable/restorable) -> deleted (gone; only via rm --delete --confirm, from the archive,
@@ -137,6 +149,7 @@ FOOTER_RESERVE_FALLBACK = 420
 TITLE_MAX = 96
 
 _SECTION_TITLES = {
+    "pinned": "  📌 PINNED (user override — run these before the do-now pile, whatever their tier)",
     "actionable": "  ACTIONABLE",
     "waiting": "  WAITING (releases itself when its target lands)",
     "gated": "  GATED (needs you)",
@@ -144,7 +157,10 @@ _SECTION_TITLES = {
     "done": "  DONE",
 }
 
-_SECTION_ORDER = ("actionable", "waiting", "gated", "untriaged", "done")
+# PINNED sits above everything, because that is exactly what a pin asserts: it outranks the
+# tier order. It is a DISPLAY section lifted out of the tiers, not a fifth tier — partition()
+# stays four-way and its sum invariant is untouched (see split_pinned).
+_SECTION_ORDER = ("pinned", "actionable", "waiting", "gated", "untriaged", "done")
 
 
 def _trim(text, cap=TITLE_MAX):
@@ -156,9 +172,10 @@ def _sections(sel, c):
     """(section, members) in reading order, store order preserved inside each section."""
     done = [i for i in sel if i.get("done")]
     openish = [i for i in sel if not i.get("done")]
+    pinned, openish = c.split_pinned(openish)
     g = c.partition(openish)
-    groups = {"actionable": g["actionable"], "waiting": g["waiting"], "gated": g["gated"],
-              "untriaged": g["untriaged"], "done": done}
+    groups = {"pinned": pinned, "actionable": g["actionable"], "waiting": g["waiting"],
+              "gated": g["gated"], "untriaged": g["untriaged"], "done": done}
     return [(name, groups[name]) for name in _SECTION_ORDER if groups[name]]
 
 
@@ -166,6 +183,8 @@ def _item_lines(i, surf, verbose, items, arch, c):
     """One item's lines. Compact is a single line; --verbose restores everything."""
     if i.get("done"):
         flag = "✓"
+    elif c.is_pinned(i):
+        flag = "📌"
     elif c.is_waiting(i):
         flag = "⏳"
     elif c.is_gated(i):
@@ -197,6 +216,8 @@ def _item_lines(i, surf, verbose, items, arch, c):
         lines.append(f"      - {_trim(b, 200)}")
     if i.get("gate_reason"):
         lines.append(f"      gated: {i['gate_reason']}")
+    if c.is_pinned(i):
+        lines.append(f"      pinned: {i.get('pin_reason') or 'no reason recorded'}")
     return lines
 
 
@@ -334,6 +355,57 @@ def _dashboard(store, items):
     return 0
 
 
+def _recover(args):
+    """File-level recovery from a backup — the sanctioned alternative to `cp`.
+
+    Runs BEFORE the store is parsed (it is the command for when parsing fails), and journals
+    the event, so "the store went backwards" is visible in the store's own history instead of
+    being an untraceable file swap.
+    """
+    store = c.store_path()
+    cands = c.valid_backups(store)
+    if args.list_backups:
+        if not cands:
+            print("no valid backup found in %s" % c.backup_dir(store))
+            return 1
+        print("backups that parse, newest first (the first one is what a bare `recover` uses):")
+        for i, (path, n) in enumerate(cands):
+            print("  %s %s  (%d item%s)" % ("▶" if i == 0 else " ", path, n,
+                                            "" if n == 1 else "s"))
+        return 0
+
+    readable = None
+    try:
+        readable = c.load_store(store)
+    except c.StoreCorrupt:
+        pass
+    if readable is not None and not args.yes:
+        # The dangerous case is not the broken store — it is recovering over a WORKING one,
+        # which throws away every change made since the snapshot. Gate that, not the repair.
+        print("the current store is READABLE (%d item%s). Recovering would replace it with a "
+              "snapshot and lose anything newer.\nRe-run with --yes if that is really what you "
+              "want, or `waypoints.py recover --list` to look first."
+              % (len(readable["items"]), "" if len(readable["items"]) == 1 else "s"),
+              file=sys.stderr)
+        return 2
+
+    try:
+        used, n, quarantined = c.recover_store(args.from_backup, store,
+                                               argv=["recover"] + (["--from", args.from_backup]
+                                                                   if args.from_backup else []))
+    except FileNotFoundError as e:
+        print("cannot recover: %s" % e, file=sys.stderr)
+        return 1
+    except Exception as e:
+        print("cannot recover from %s: %s" % (args.from_backup, e), file=sys.stderr)
+        return 1
+    print("recovered %d item%s from %s" % (n, "" if n == 1 else "s", used))
+    if quarantined:
+        print("the replaced file was kept at %s (outside the rotating ring)" % quarantined)
+    print("journalled — `waypoints.py journal` now shows this recovery.")
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="waypoints", description="Manage waypoints reminders.")
     # NOT required: a bare `waypoints` is the dashboard. The most natural thing to type used
@@ -462,9 +534,43 @@ def main(argv=None):
                     help="only entries at or after this YYYY-MM-DD (or a full ISO stamp)")
 
     sub.add_parser("prune", help="move all done items to the archive (nothing is destroyed)")
+
+    ppin = sub.add_parser("pin", help="mark an item 'do this now whatever its tier' (records why)")
+    ppin.add_argument("id")
+    ppin.add_argument("--because", default=None,
+                      help="REQUIRED: why this outranks the tier order. A pin overrules an "
+                           "honest verdict, so an unexplained one is indistinguishable from a "
+                           "mistake a month later")
+    pun = sub.add_parser("unpin", help="remove a pin (the tier order applies again)")
+    pun.add_argument("id")
+
+    prc = sub.add_parser("recover", help="put the newest VALID backup back in place of an "
+                                         "unreadable store (journalled)")
+    prc.add_argument("--list", action="store_true", dest="list_backups",
+                     help="show the backups that parse, newest first, and change nothing")
+    prc.add_argument("--from", dest="from_backup", default=None,
+                     help="recover from THIS backup instead of the newest valid one")
+    prc.add_argument("--yes", action="store_true",
+                     help="skip the confirmation when the current store is READABLE "
+                          "(recovering over a readable store replaces live data)")
     args = p.parse_args(argv)
 
-    store = c.load_store()
+    if args.cmd == "recover":
+        return _recover(args)
+
+    try:
+        store = c.load_store()
+    except c.StoreCorrupt as e:
+        # REFUSE. Pre-0.7.0 this read as an empty store, and the next write made that emptiness
+        # canonical — data loss by default. `journal` and `recover` are the two commands that
+        # must still work here, and neither needs the store parsed.
+        print(e.report(), file=sys.stderr)
+        if args.cmd == "journal":
+            print("\n(reading the journal anyway — it is a separate append-only file)\n",
+                  file=sys.stderr)
+            store = {"version": c.VERSION, "items": []}
+        else:
+            return 2
     items = store["items"]
 
     if args.cmd is None or args.cmd == "dashboard":
@@ -765,6 +871,26 @@ def main(argv=None):
             return 1
         c.save_store(store)
         print(f"{args.id} is now {'done' if new_state else 'open'}")
+        return 0
+
+    if args.cmd in ("pin", "unpin"):
+        want = args.cmd == "pin"
+        try:
+            it = c.set_pinned(items, args.id, want, getattr(args, "because", None))
+        except ValueError as e:
+            print("%s\nExample: waypoints.py pin %s --because \"user wants it today; the tier "
+                  "order would push it past the whole do-now pile\"" % (e, args.id),
+                  file=sys.stderr)
+            return 2
+        if it is None:
+            print(f"no such waypoint: {args.id}", file=sys.stderr)
+            return 1
+        c.save_store(store)
+        if want:
+            print(f"📌 pinned [{it['id']}] {it['title']}\n   tier stays {it.get('tier') or 'untriaged'} "
+                  f"— a pin changes WHEN it runs, not how big it is\n   because: {it['pin_reason']}")
+        else:
+            print(f"unpinned [{it['id']}] {it['title']} — the tier order applies again")
         return 0
 
     if args.cmd == "priority":

@@ -75,11 +75,20 @@ def test_cli_add_list_done_prune(tmp_path):
     assert "(no open waypoints)" in _run([CLI, "list"], store, "2026-07-12").stdout
 
 
-def test_hook_survives_corrupt_store(tmp_path):
+def test_hook_is_LOUD_about_a_corrupt_store_instead_of_silently_blank(tmp_path):
+    # 0.7.0: silence was the bug. A corrupt store read as empty, so the banner just vanished --
+    # the most alarming state produced the least alarming output. It must still exit 0 (never
+    # block a session) but it must SAY so, to the user and to the model, and point at `recover`.
     store = tmp_path / "s.json"
     store.write_text("{ this is not valid json ")
     r = _run([HOOK], store, "2026-07-12")
-    assert r.returncode == 0 and r.stdout.strip() == ""  # fail-safe, no crash
+    assert r.returncode == 0  # still never blocks a session
+    payload = json.loads(r.stdout)
+    for text in (payload["systemMessage"],
+                 payload["hookSpecificOutput"]["additionalContext"]):
+        assert "UNREADABLE" in text
+        assert "recover" in text
+    assert "hand-edit" in payload["hookSpecificOutput"]["additionalContext"]
 
 
 # ---- v0.1.3: add --point, edit, show ----
@@ -299,13 +308,13 @@ def test_list_json_emits_the_documented_contract(tmp_path):
     # Contract 2 added the `waiting` count and `waiting_on`. The bump is deliberate: the
     # documented sum invariant changed from gated+actionable+untriaged to
     # gated+waiting+actionable+untriaged, so a consumer auditing the old sum would break.
-    assert p["contract"] == 2
+    assert p["contract"] == 3
     assert "waiting" in p["counts"]
     assert (p["counts"]["gated"] + p["counts"]["waiting"] + p["counts"]["actionable"]
             + p["counts"]["untriaged"]) == p["counts"]["open"]
     assert p["generated"] == "2026-07-12"
     assert set(p["counts"]) == {"total", "open", "done", "surfaceable", "gated",
-                                "waiting", "actionable", "untriaged"}
+                                "waiting", "actionable", "untriaged", "pinned"}
     row = p["items"][0]
     # Every documented field is present, and the verdict fields are null rather than missing.
     for key in ("id", "title", "summary", "detail", "created", "surface_on", "done",
@@ -1230,3 +1239,108 @@ def test_compact_list_shows_every_target_of_a_multi_target_wait(tmp_path):
          store, "2026-09-01")
     out = _run([CLI, "list"], store, "2026-09-01").stdout
     assert "target-a @ freeze + target-b @ decide" in out
+
+
+# ---- 0.7.0: the CLI refuses a corrupt store, and `recover` is the sanctioned repair ----
+
+def test_cli_refuses_to_operate_on_a_corrupt_store(tmp_path):
+    # Pre-0.7.0 this read as an empty store and the next write made the emptiness canonical.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Keep me"], store, "2026-09-04")
+    _run([CLI, "add", "Keep me too"], store, "2026-09-04")  # 2nd write => a snapshot exists
+    store.write_text("{ broken ")
+    r = _run([CLI, "list"], store, "2026-09-04")
+    assert r.returncode == 2
+    assert "REFUSING" in r.stderr and "recover" in r.stderr
+    assert store.read_text() == "{ broken "  # untouched: no write happened
+
+
+def test_cli_add_does_not_overwrite_a_corrupt_store(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Keep me"], store, "2026-09-04")
+    store.write_text("{ broken ")
+    r = _run([CLI, "add", "New thing"], store, "2026-09-04")
+    assert r.returncode == 2 and store.read_text() == "{ broken "
+
+
+def test_cli_recover_restores_the_newest_valid_backup(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Keep me"], store, "2026-09-04")
+    _run([CLI, "add", "And me"], store, "2026-09-04")
+    store.write_text("{ broken ")
+    r = _run([CLI, "recover"], store, "2026-09-04")
+    assert r.returncode == 0, r.stderr
+    assert "recovered" in r.stdout and "journalled" in r.stdout
+    out = _run([CLI, "list"], store, "2026-09-04").stdout
+    assert "Keep me" in out
+
+
+def test_cli_recover_list_changes_nothing(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Keep me"], store, "2026-09-04")
+    _run([CLI, "add", "And me"], store, "2026-09-04")
+    before = store.read_text()
+    r = _run([CLI, "recover", "--list"], store, "2026-09-04")
+    assert r.returncode == 0 and "item" in r.stdout
+    assert store.read_text() == before
+
+
+def test_cli_recover_over_a_READABLE_store_needs_yes(tmp_path):
+    # The dangerous case is not the broken store -- it is discarding a working one.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Keep me"], store, "2026-09-04")
+    _run([CLI, "add", "Newer thing"], store, "2026-09-04")
+    r = _run([CLI, "recover"], store, "2026-09-04")
+    assert r.returncode == 2 and "--yes" in r.stderr
+    assert "Newer thing" in _run([CLI, "list"], store, "2026-09-04").stdout
+    r2 = _run([CLI, "recover", "--yes"], store, "2026-09-04")
+    assert r2.returncode == 0
+
+
+def test_cli_journal_still_readable_when_the_store_is_corrupt(tmp_path):
+    # The journal is a separate append-only file, and it is exactly what a reader needs here.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Keep me"], store, "2026-09-04")
+    store.write_text("{ broken ")
+    r = _run([CLI, "journal"], store, "2026-09-04")
+    assert "REFUSING" in r.stderr and "add" in r.stdout
+
+
+# ---- 0.7.0: pin / unpin ----
+
+def test_cli_pin_requires_a_reason_and_says_how(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Big thing"], store, "2026-09-04")
+    _run([CLI, "triage", "big-thing", "--tier", "heavy"], store, "2026-09-04")
+    r = _run([CLI, "pin", "big-thing"], store, "2026-09-04")
+    assert r.returncode == 2 and "--because" in r.stderr
+
+
+def test_cli_pin_keeps_the_tier_and_shows_it_first(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Big thing"], store, "2026-09-04")
+    _run([CLI, "add", "Quick thing"], store, "2026-09-04")
+    _run([CLI, "triage", "big-thing", "--tier", "heavy"], store, "2026-09-04")
+    _run([CLI, "triage", "quick-thing", "--tier", "do-now"], store, "2026-09-04")
+    r = _run([CLI, "pin", "big-thing", "--because", "user wants it today"], store, "2026-09-04")
+    assert r.returncode == 0 and "tier stays heavy" in r.stdout
+    out = _run([CLI, "list"], store, "2026-09-04").stdout
+    assert out.index("PINNED") < out.index("ACTIONABLE")
+    assert out.index("big-thing") < out.index("quick-thing")
+    banner = json.loads(_run([HOOK], store, "2026-09-04").stdout)["systemMessage"]
+    assert "📌" in banner
+
+
+def test_cli_unpin_puts_it_back_under_the_tier_order(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Big thing"], store, "2026-09-04")
+    _run([CLI, "pin", "big-thing", "--because", "today"], store, "2026-09-04")
+    r = _run([CLI, "unpin", "big-thing"], store, "2026-09-04")
+    assert r.returncode == 0 and "tier order applies again" in r.stdout
+    assert "PINNED" not in _run([CLI, "list"], store, "2026-09-04").stdout
+
+
+def test_cli_pin_missing_id_errors(tmp_path):
+    store = tmp_path / "s.json"
+    r = _run([CLI, "pin", "nope", "--because", "x"], store, "2026-09-04")
+    assert r.returncode == 1 and "no such waypoint" in r.stderr
