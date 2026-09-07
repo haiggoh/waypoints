@@ -5,6 +5,64 @@ All notable changes to `waypoints` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-09-07
+
+### Added
+- **An interactive command selector, opened by a bare `waypoints` on a terminal.** The store must
+  be maintained through the CLI and never by hand, but the commands needed for routine upkeep are
+  not the ones anyone remembers: "add a bullet" is `edit <id> --add-point`, and reaching for an
+  editor because you cannot recall a flag is how the store was lost on 2026-09-03. The selector
+  covers the whole surface — 21 actions across look / capture / close / triage / maintain — so
+  upkeep stays possible from a bare terminal with no Claude Code session available at all.
+  - **It never touches the store.** Every action composes an argv and hands it to the ordinary CLI
+    dispatch, so guards, confirmations, journal entries and the backup ring behave exactly as if
+    the command had been typed, and the journal records the real command rather than "menu". A
+    selector that reimplemented even one mutation would be a worse bug than the one it prevents.
+  - **It echoes the command before running it** — for teaching, not confirmation. Each use shows
+    the real invocation, so a reader graduates off the menu instead of depending on it.
+  - Items are picked **by number** from a list rather than by re-typing a slug id, which is where
+    a wrong-item mutation comes from on a surface with no autocomplete. Typing an id still works,
+    and is necessary past the pick limit.
+  - `add-point` is offered under **the name people actually reach for**, though no such subcommand
+    exists. It composes `--add-point` (append), never `--point` (which replaces every bullet).
+  - Safety is shaped per action: irreversible-ish prompts default to **no** so a hurried return is
+    never the destructive answer; `--replace-points` is shown as destructive and needs its guard
+    flag plus a confirmation; `prune` reports the count it would move first, since its effect is
+    otherwise invisible until afterwards; and `recover`, which replaces the whole store file, only
+    ever offers its read-only `--list` from here.
+  - A command that exits non-zero ends the **action**, not the session. Being dropped back to the
+    shell over one mis-typed date is the friction this exists to remove.
+- `waypoints menu` runs the selector explicitly, and says why when it cannot.
+
+### Changed
+- **A bare `waypoints` on a terminal now prints the dashboard and then the selector.** The
+  dashboard is the context you need in order to choose an action, so the selector adds to it rather
+  than replacing it — but its trailing "Commands:" hint block is suppressed when the menu is about
+  to list the same commands as a numbered menu, which would otherwise say everything twice and push
+  the prompt off a short terminal. With no menu following, the hints print exactly as before.
+- The README no longer says the store can be edited directly — it contradicted rule zero on the
+  page that introduces the CLI.
+
+### Unchanged on purpose
+- **Non-interactive behaviour is byte-identical.** The selector is gated on **both** stdin and
+  stdout being a TTY, so a pipe, a script or a hook running bare `waypoints` gets the same plain
+  dashboard it always did. Blocking any of those forever on input that will never arrive would be a
+  far worse regression than a missing convenience. `waypoints dashboard` remains the explicit
+  non-interactive form, and `WAYPOINTS_NO_MENU=1` is the opt-out for a terminal that does not want
+  the prompt.
+
+### Tests
+- `tests/test_menu.py` — 48 tests in two halves. Unit tests drive the loop with a fake dispatch and
+  assert the **argv** a keystroke sequence composes, which is the contract that matters. A **pty**
+  test runs the real launcher under a pseudo-terminal, because every non-pty invocation takes the
+  other branch by definition, so a suite without one would assert the fallback forever and never
+  prove the feature runs. It caught a real wiring bug (`c.load` does not exist) that all 45
+  composition tests passed straight over.
+- Store-touching tests assert the sandbox **by outcome** — the live store's mtime is untouched —
+  because `WAYPOINTS_FILE` fails open, and a typo'd variable name writes to the real store.
+- Mutation-tested 12/12, including the TTY gate, the `--add-point`-not-`--point` composition, the
+  `recover` read-only routing and the no-by-default confirmations.
+
 **Provenance.** This file was reconstructed on 2026-09-03, after the fact, from the complete
 first-parent Git history. Each commit was read together with the release it actually shipped in —
 that is, the next version bump at or after it, *not* the version its own message happens to mention,

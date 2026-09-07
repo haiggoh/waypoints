@@ -5,6 +5,45 @@ banner — and, unlike [`resume-interrupted`](https://github.com/haiggoh/resume-
 **persists until each item is explicitly marked done** (it does not self-denoise). It reads an
 explicit store you maintain, so the banner shows exactly what you logged — no false positives.
 
+## Maintenance from a bare terminal
+
+Run `waypoints` with no arguments on a terminal and it prints the dashboard, then opens an
+interactive selector over the whole command surface:
+
+```
+waypoints> 7            # or type the name: add-point
+
+    1) · [ship-the-tranche] Ship the manifest tranche
+    2) ⏳ [agy-discovery]   Let AGY discover models
+  item (number or id): 1
+  bullets to APPEND (existing ones are kept) — one per line, blank line to finish:
+    1> reconcile the version first
+
+  $ waypoints edit ship-the-tranche --add-point 'reconcile the version first'
+```
+
+This exists because the store must be maintained through the CLI and never by hand, yet the
+commands you need for routine upkeep are not the ones you remember — "add a bullet" is
+`edit <id> --add-point`, which nobody recalls under pressure. The selector closes that gap so
+upkeep stays possible with no Claude Code session available at all, which is exactly when
+hand-editing the JSON is most tempting and most destructive.
+
+Three properties are deliberate:
+
+- **It only ever composes an argv and hands it to the ordinary CLI.** No command logic is
+  duplicated, so every guard, confirmation, journal entry and backup behaves identically to the
+  typed command — there is no second code path that can drift from the first.
+- **It echoes the command before running it.** Not for confirmation but for teaching: each use
+  shows the real invocation, so you graduate off the menu instead of depending on it.
+- **It opens only on a real terminal.** A pipe, a script or a hook running bare `waypoints` gets
+  the plain dashboard exactly as before, because blocking those on input that never arrives would
+  be far worse than a missing convenience. `waypoints dashboard` is the explicit non-interactive
+  form, and `WAYPOINTS_NO_MENU=1` turns the prompt off for a terminal that does not want it.
+
+Destructive actions keep their defaults pointed at "no", `prune` shows the count it would move
+before asking, and `recover` — which replaces the whole store file — only ever offers its
+read-only `--list` from here.
+
 ## What it does
 
 At session start, a hook reads `~/.claude/waypoints.json`, keeps the items that are **not
@@ -29,7 +68,8 @@ If there are no surfaceable items, it prints nothing (no empty banner).
 
 You don't need a console command: **just ask Claude** to add, complete, or list waypoints — it
 surfaces the open ones each session and closes them for you (at the latest when you wrap up). Under
-the hood it uses the bundled CLI, which you can also run yourself (or edit the JSON directly):
+the hood it uses the bundled CLI, which you can also run yourself — **never** by editing the JSON,
+which is one document whose single botched escape makes every item unreadable at once:
 
 ```sh
 waypoints.py list

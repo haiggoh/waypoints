@@ -18,6 +18,11 @@ description: Use to manage the user's persistent open-items reminder ("waypoints
 - If the file IS broken: run `waypoints.py recover`. It puts the newest backup that actually
   parses back in place, keeps the damaged file, and records the recovery in the journal.
 - If a command seems awkward, run `waypoints.py --help`. Do not fall back to editing the file.
+- If the reason to reach for an editor is "I do not remember the command", run `waypoints` with
+  no arguments **on a terminal**: it prints the dashboard and then an interactive selector over
+  the whole command surface, echoing each real invocation before running it. It composes an argv
+  and hands it to this same CLI, so nothing about the guards or the journal changes. That is the
+  sanctioned answer to not remembering a flag — hand-editing never is.
 
 A "waypoint" is a point still **ahead** of you on the journey — an unfinished task/follow-up you
 want surfaced at the start of every session **until you reach (complete) it**. Unlike Claude Code's

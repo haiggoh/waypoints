@@ -6,7 +6,9 @@ escape makes json.load fail for the WHOLE file, so ALL items become unreadable a
 is how the store was lost on 2026-09-03. If the file already looks broken, do not repair it by
 hand either: run `waypoints.py recover`.
 
-    waypoints                            # a concise dashboard (counts, top items, what to type)
+    waypoints                            # dashboard, then an interactive selector on a terminal
+    waypoints menu                       # the selector explicitly (needs a TTY)
+    waypoints dashboard                  # just the dashboard, never interactive
     waypoints list                       # every item, ONE LINE each, grouped by verdict
     waypoints list --verbose             # ...plus bullets, gate reasons, dates, priorities
     waypoints list --json                # documented machine-readable contract (see list_payload)
@@ -86,6 +88,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import waypoints_core as c
+import waypoints_menu as menu
 
 
 JOURNAL_ARGV_TOKEN_MAX = 60
@@ -316,7 +319,7 @@ def _next_page_cmd(args, page):
 DASHBOARD_TOP = 5
 
 
-def _dashboard(store, items):
+def _dashboard(store, items, show_commands=True):
     """`waypoints` with no arguments: a concise orientation, not the whole inventory.
 
     The bare command used to be an error (the subparser was required), which meant the most
@@ -346,6 +349,11 @@ def _dashboard(store, items):
             print(line)
     if g["gated"]:
         print(f"\n{len(g['gated'])} gated item(s) need something from you: waypoints list --gated")
+    if not show_commands:
+        # The selector is about to print the same commands as a numbered menu, so listing them
+        # here first would say everything twice and push the actual prompt off the screen. The
+        # hint block exists for the case where there is nothing interactive to follow it.
+        return 0
     print("\nCommands:")
     print("  waypoints list                 every item, one line each")
     print("  waypoints list --waiting       what is blocked on another item")
@@ -412,6 +420,7 @@ def main(argv=None):
     # to be an argparse error, which taught the reader nothing.
     sub = p.add_subparsers(dest="cmd", required=False)
     sub.add_parser("dashboard", help="the concise orientation shown by a bare `waypoints`")
+    sub.add_parser("menu", help="the interactive command selector ""(also offered by a bare `waypoints` on a terminal)")
     sub.add_parser("resolve", help="release waiting items whose target has landed; "
                                    "report waiting targets that do not exist")
     pl = sub.add_parser("list", help="list all items")
@@ -573,8 +582,28 @@ def main(argv=None):
             return 2
     items = store["items"]
 
-    if args.cmd is None or args.cmd == "dashboard":
-        return _dashboard(store, items)
+    if args.cmd is None or args.cmd in ("dashboard", "menu"):
+        # The dashboard prints FIRST in both cases, then the selector opens if it may. The
+        # dashboard is the context you need in order to choose an action, so replacing it with a
+        # bare menu would trade orientation for convenience; showing both costs a few lines.
+        #
+        # `dashboard` stays non-interactive forever -- it is the explicit way to ask for just the
+        # summary, and the escape hatch for a terminal that does not want the prompt. A bare
+        # `waypoints` opens the selector only on a real TTY, so a pipe, a script or a hook is
+        # unaffected: blocking those on input that never arrives would be a far worse regression
+        # than the missing convenience. `menu` forces it and says so when it cannot.
+        opening_menu = args.cmd != "dashboard" and menu.available()
+        rc = _dashboard(store, items, show_commands=not opening_menu)
+        if args.cmd == "dashboard":
+            return rc
+        if not menu.available():
+            if args.cmd == "menu":
+                print("\n(the selector needs an interactive terminal — "
+                      "stdin/stdout are not a TTY, or WAYPOINTS_NO_MENU is set)",
+                      file=sys.stderr)
+                return 2
+            return rc
+        return menu.run(dispatch=main)
 
     if args.cmd == "resolve":
         arch = c.load_archive()["items"]
