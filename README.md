@@ -178,7 +178,30 @@ waypoints                 # a concise dashboard: counts, the top items, what to 
 waypoints list            # every item, ONE LINE each, grouped by verdict
 waypoints list --verbose  # ...plus bullets, gate reasons, dates and priorities
 waypoints show <id>       # the full detail of one item
+waypoints search "kw"     # find items by keyword — title, bullets AND detail
 ```
+
+### Search the store, never grep the list
+
+`waypoints search` exists because **grepping the rendered list is not searching the store.** The
+compact view described below truncates titles at 96 characters, so:
+
+```
+waypoints list | grep -i spinner     # ✗ finds nothing if the match sits past the ellipsis
+waypoints search spinner             # ✓ searches the DATA, prints the match untruncated
+```
+
+That is not hypothetical. Asked whether an idea was already tracked, a session grepped the list,
+got nothing, and filed a **duplicate** — the item had been tracked for two weeks, in a title whose
+matching words fell past the cut. The failure mode is the dangerous kind: a truncating view returns
+zero hits having examined nothing, which is indistinguishable from a real absence.
+
+So `search` looks at the title, every bullet, and the `detail` field (where continuity dumps live,
+invisible to every view except `show`), prints matching lines **in full** so its own output is safe
+to grep, and exits `0` on a hit / `1` on a miss so it composes in a script. A miss names the scope
+it searched and points at `--all`, because *"was this **ever** tracked?"* is answered by archived
+items — add `--archived` to search only those, `--all` for both. `--case`, `--regex` and
+`--ids-only` are there for the scripted cases.
 
 `bin/waypoints.py` remains a compatibility entry point — existing notes and habits keep working.
 

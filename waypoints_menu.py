@@ -204,6 +204,16 @@ def a_show(items, arch):
     return ["show", ask_item([i for i in items], "item")]
 
 
+def a_search(items, arch):
+    """Keyword search. Reachable from the selector because a search you can only run by typing
+    the flag is useless in the case the menu exists for — a bare terminal, no docs to hand."""
+    q = ask("keyword (searches title, bullets and detail)", required=True)
+    argv = ["search", q]
+    if confirm("include closed/archived items (--all)?"):
+        argv.append("--all")
+    return argv
+
+
 def a_add(items, arch):
     title = ask("title", required=True)
     argv = ["add", title]
@@ -403,6 +413,7 @@ ACTIONS = [
     ("look", [
         ("list",       "list items, by view",                 a_list),
         ("show",       "one item's full detail",              a_show),
+        ("search",     "find items by keyword (title, bullets, detail)", a_search),
         ("journal",    "what changed, when, by which command", a_journal),
         ("archive",    "the closed-item trail",               a_archive_list),
         ("archived",   "one archived item's full record",     a_archive_show),

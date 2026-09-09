@@ -1344,3 +1344,104 @@ def test_cli_pin_missing_id_errors(tmp_path):
     store = tmp_path / "s.json"
     r = _run([CLI, "pin", "nope", "--because", "x"], store, "2026-09-04")
     assert r.returncode == 1 and "no such waypoint" in r.stderr
+
+
+# --------------------------------------------------------------- search (the truncation false negative)
+
+def test_search_finds_a_match_the_truncated_list_view_hides(tmp_path):
+    """THE ORIGINATING INCIDENT, 2026-09-07, as an executable test.
+
+    Asked whether a spinner idea was already tracked, a session ran
+    `waypoints.py list | grep -i spinner` and concluded it was ABSENT. It had been tracked for two
+    weeks in an item whose TITLE contains the word — but `list` truncates titles, so the rendered
+    line ended in an ellipsis before the match and grep saw nothing. A duplicate item was filed.
+
+    The test asserts BOTH halves, because only the contrast proves the fix: grepping the rendered
+    view still misses (that is a property of a display, not a bug to fix), and `search` finds it.
+    A test that only checked `search` would pass just as well against a view that never truncated,
+    and so would not pin the thing that actually went wrong."""
+    store = tmp_path / "s.json"
+    # The keyword must sit PAST the list view's title cap (TITLE_MAX = 96), which is what put
+    # "spinner words" beyond the ellipsis in the real item. Placing it earlier would leave the
+    # match visible and the test would assert nothing.
+    long_title = ("LOCAL sessions VISUALLY DISTINCT: statusline theming, terminal chrome, live "
+                  "tok/s metering, and model-aware spinner words")
+    _run([CLI, "add", long_title], store, "2026-09-07")
+
+    listed = _run([CLI, "list"], store, "2026-09-07").stdout
+    assert "spinner" not in listed.lower(), (
+        "the premise of this test is that `list` truncates the match away; if the view stopped "
+        "truncating, this test is no longer exercising the incident")
+
+    found = _run([CLI, "search", "spinner"], store, "2026-09-07")
+    assert found.returncode == 0
+    assert "spinner" in found.stdout.lower()
+
+
+def test_search_covers_bullets_and_detail_not_just_the_title(tmp_path):
+    """Detail is invisible to every view except `show`, which is where continuity dumps live —
+    so a search that skipped it would still answer 'was this tracked?' wrongly."""
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "An unrelated title", "--point", "a bullet mentioning frobnicator",
+          "--detail", "a detail mentioning wumpus"], store, "2026-09-07")
+    assert _run([CLI, "search", "frobnicator"], store).returncode == 0
+    assert _run([CLI, "search", "wumpus"], store).returncode == 0
+    assert _run([CLI, "search", "nowhere-at-all"], store).returncode == 1
+
+
+def test_search_prints_matching_text_untruncated(tmp_path):
+    """A search command that truncated would rebuild the very bug it exists to fix — its own
+    output has to be safe to grep."""
+    store = tmp_path / "s.json"
+    bullet = ("a deliberately long bullet " + "x" * 200 + " ending with the needle sentinel-word "
+              "after two hundred characters of padding")
+    _run([CLI, "add", "Title", "--point", bullet], store)
+    out = _run([CLI, "search", "sentinel-word"], store).stdout
+    assert "sentinel-word" in out
+    assert "…" not in out and "..." not in out
+
+
+def test_search_exit_code_and_scope_message(tmp_path):
+    """A miss must be distinguishable from a hit by exit code (so it composes in a script), and
+    must name the scope it looked in — the failure this replaces was a silent false negative, so
+    an empty result that does not say where it looked would repeat it."""
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Only open item"], store)
+    hit = _run([CLI, "search", "open item"], store)
+    miss = _run([CLI, "search", "absent-thing"], store)
+    assert hit.returncode == 0 and miss.returncode == 1
+    assert "--archived" in miss.stdout or "--all" in miss.stdout
+
+
+def test_search_scopes_open_and_archived_separately(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Archivable thing"], store)
+    sid = json.loads(store.read_text())["items"][0]["id"]
+    _run([CLI, "done", sid], store)
+    _run([CLI, "prune"], store)
+
+    assert _run([CLI, "search", "Archivable"], store).returncode == 1          # not in open
+    assert _run([CLI, "search", "Archivable", "--archived"], store).returncode == 0
+    assert _run([CLI, "search", "Archivable", "--all"], store).returncode == 0
+
+
+def test_search_case_and_regex_and_ids_only(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "MixedCase Needle"], store)
+    assert _run([CLI, "search", "needle"], store).returncode == 0               # default: insensitive
+    assert _run([CLI, "search", "needle", "--case"], store).returncode == 1     # --case respects it
+    assert _run([CLI, "search", r"Mixed.*Needle", "--regex"], store).returncode == 0
+    ids = _run([CLI, "search", "Needle", "--ids-only"], store).stdout.strip().splitlines()
+    assert len(ids) == 1 and " " not in ids[0]
+    bad = _run([CLI, "search", "[unclosed", "--regex"], store)
+    assert bad.returncode == 2 and "bad --regex" in bad.stderr
+
+
+def test_search_never_writes_to_the_store(tmp_path):
+    """Read-only by contract: no journal entry, no snapshot, no mtime change."""
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Something"], store)
+    before = store.read_bytes()
+    _run([CLI, "search", "Something"], store)
+    _run([CLI, "search", "nothing-here"], store)
+    assert store.read_bytes() == before

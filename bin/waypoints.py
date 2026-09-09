@@ -22,6 +22,11 @@ hand either: run `waypoints.py recover`.
                                          # --add-point APPENDS; --point REPLACES (guarded)
                         [--surface-on YYYY-MM-DD] [--clear-surface-on]
     waypoints show <id>                  # print title + summary + full detail (the "pick it up" view)
+    waypoints search "kw" [--all|--archived] [--case] [--regex] [--ids-only]
+                                         # find items by keyword across title, bullets AND detail.
+                                         # Use this instead of `list | grep`: the list view
+                                         # TRUNCATES, so a grep over it silently misses matches
+                                         # past the ellipsis and reads as a genuine absence.
     waypoints done <id> [--as "resolution"]  # mark done; --as rewrites the title to the outcome
                                              # (use it when the title reads as an open question)
     waypoints reopen <id>                # undo done (inverse of `done`); AUTO-RESTORES an
@@ -84,6 +89,7 @@ and the backup dir are all derived from it, so one env var redirects the whole f
 import argparse
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -482,6 +488,18 @@ def main(argv=None):
     ps = sub.add_parser("show", help="print an item's full detail (the pick-it-up view)")
     ps.add_argument("id")
 
+    pf = sub.add_parser("search", help="find items by keyword across title, bullets and detail")
+    pf.add_argument("query", help="substring to look for (case-insensitive by default)")
+    pf.add_argument("--archived", action="store_true",
+                    help="search the ARCHIVE instead of the live store — 'was this ever tracked?'")
+    pf.add_argument("--all", action="store_true",
+                    help="search the live store AND the archive")
+    pf.add_argument("--case", action="store_true", help="case-sensitive match")
+    pf.add_argument("--regex", action="store_true",
+                    help="treat the query as a regular expression instead of a substring")
+    pf.add_argument("--ids-only", action="store_true",
+                    help="print only matching ids, one per line (for scripting)")
+
     pd = sub.add_parser("done", help="mark an item done by id")
     pd.add_argument("id")
     pd.add_argument("--as", dest="resolved", default=None, metavar="RESOLUTION",
@@ -785,6 +803,71 @@ def main(argv=None):
         c.save_store(store)
         print(f"edited [{it['id']}] {it['title']}")
         return 0
+
+    if args.cmd == "search":
+        # WHY THIS EXISTS. Asked whether a spinner idea was already tracked, a session ran
+        # `waypoints.py list | grep -i spinner` and concluded it was ABSENT. It had been tracked
+        # for two weeks — but `list` TRUNCATES titles, so the rendered line ended "local-identit…"
+        # and the match was cut off past the ellipsis. A duplicate item was filed as a result.
+        #
+        # Grepping a rendered VIEW is not searching the STORE, and the failure is silent: a
+        # truncating view returns zero hits having examined nothing, which is indistinguishable
+        # from a genuine absence. So this searches the DATA — title, every summary bullet, and the
+        # detail (where continuity dumps live, invisible to every view except `show`) — and prints
+        # matching text UNTRUNCATED, so its own output is safe to grep and safe to trust.
+        if args.regex:
+            try:
+                rx = re.compile(args.query, 0 if args.case else re.I)
+            except re.error as e:
+                print(f"bad --regex: {e}", file=sys.stderr)
+                return 2
+            hit = lambda text: bool(rx.search(text))
+        else:
+            needle = args.query if args.case else args.query.lower()
+            hit = lambda text: needle in (text if args.case else text.lower())
+
+        pools = []
+        if args.archived or args.all:
+            pools.append(("archived", c.load_archive()["items"]))
+        if not args.archived or args.all:
+            pools.insert(0, ("open", items))
+
+        total = 0
+        for where, pool in pools:
+            for it in pool:
+                fields = []                      # (label, text) for every place a match can hide
+                fields.append(("title", it.get("title") or ""))
+                for b in it.get("summary") or []:
+                    fields.append(("point", b))
+                if it.get("detail"):
+                    fields.append(("detail", it["detail"]))
+                matched = [(lab, txt) for lab, txt in fields if hit(txt)]
+                if not matched:
+                    continue
+                total += 1
+                if args.ids_only:
+                    print(it["id"])
+                    continue
+                state = "done" if it.get("done") else where
+                print(f"[{it['id']}] {it.get('title') or ''}   ({state})")
+                for lab, txt in matched:
+                    if lab == "title":
+                        continue          # already printed in full on the line above
+                    for line in txt.splitlines():
+                        if hit(line):
+                            print(f"    {lab}: {line}")
+        if not args.ids_only:
+            scope = " + ".join(w for w, _ in pools)
+            if total:
+                print(f"\n{total} item(s) matched {args.query!r} in {scope}")
+            else:
+                # An empty result must not read like a working search that found nothing when the
+                # scope was simply wrong -- the original bug was a false negative, so this names
+                # the scope it actually looked in and the flag that widens it.
+                print(f"no item matched {args.query!r} in {scope}"
+                      + ("" if (args.archived or args.all)
+                         else " — add --archived or --all to include closed items"))
+        return 0 if total else 1
 
     if args.cmd == "show":
         it = c.get_item(items, args.id)

@@ -107,6 +107,12 @@ waypoints.py edit <id> [--title "…"] [--add-point "…" ...] [--clear-summary]
 #   --point REPLACES the entire bullet list. It is REFUSED when the item already has bullets unless you
 #   also pass --replace-points; the refusal prints the bullets it would have discarded.
 waypoints.py show <id>                  # print title + summary + full detail (the "pick it up" view)
+waypoints.py search "kw" [--all]         # find items by keyword: title, bullets AND detail.
+                                         # ALWAYS use this to answer "is this already tracked?" --
+                                         # `list | grep` misses matches past the view's 96-char
+                                         # title truncation and reads as a genuine absence (it
+                                         # caused a real duplicate). --all includes archived, which
+                                         # is what answers "was this EVER tracked?".
 waypoints.py done <id> [--as "outcome"] # mark done; --as rewrites the title to the resolution
 waypoints.py reopen <id>                # undo done (inverse of `done`)
 waypoints.py toggle <id>                # flip an item's done state in one call

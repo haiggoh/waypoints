@@ -473,3 +473,21 @@ def test_pty_dashboard_omits_the_hints_the_menu_is_about_to_repeat(tmp_path):
     assert "1 open" in out                      # the orientation is still there
     assert "What would you like to do?" in out  # ...and so is the menu
     assert "waypoints --help" not in out        # but not the block that duplicates it
+
+
+def test_search_action_composes_a_search_argv(monkeypatch):
+    """The search command must be reachable from the SELECTOR, not only as a typed flag.
+
+    That is the whole case the menu exists for: a bare terminal with no docs to hand. The
+    originating incident was someone concluding an item was untracked; if the fix is only
+    discoverable by already knowing the flag, it does not reach that person."""
+    calls, _rc = drive(monkeypatch, ["search", "spinner", "n", "q"])
+    assert calls and calls[0][:2] == ["search", "spinner"]
+    assert "--all" not in calls[0]
+
+
+def test_search_action_offers_the_archive(monkeypatch):
+    """'Was this EVER tracked?' is exactly the question that failed, and archived items answer
+    it — so the widening flag has to be offered rather than requiring a re-run."""
+    calls, _rc = drive(monkeypatch, ["search", "spinner", "y", "q"])
+    assert calls and calls[0] == ["search", "spinner", "--all"]

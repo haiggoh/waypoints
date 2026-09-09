@@ -5,6 +5,46 @@ All notable changes to `waypoints` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-09-10
+
+### Added - `waypoints search`: search the STORE, not a rendered view
+
+Grepping the list view is not searching the store, and the failure is silent. The compact view
+truncates titles at 96 characters, so a `waypoints list | grep -i spinner` returns nothing when the
+match sits past the ellipsis - indistinguishable from a genuine absence. **That happened:** asked
+whether an idea was already tracked, a session grepped the list, got nothing, and filed a
+**duplicate** of an item that had been tracked for two weeks under a title whose matching words fell
+past the cut. Before this, not one of 21 subcommands searched, and `list` had no `--search` either.
+
+`waypoints search "keyword"` matches against the **title, every summary bullet, and `detail`** - the
+last being where continuity dumps live, invisible to every view except `show`. Design choices that
+follow directly from the bug:
+
+- **Matching text prints UNTRUNCATED.** A search command that truncated would rebuild the very bug
+  it fixes; its own output has to be safe to grep and safe to trust.
+- **Exit `0` on a hit, `1` on a miss**, so it composes in a script instead of requiring the caller
+  to parse prose.
+- **A miss names the scope it searched** and points at the flag that widens it. An empty result that
+  did not say where it looked would repeat the original false negative in a new place.
+- **The archive is searchable** (`--archived`, or `--all` for both) because *"was this **ever**
+  tracked?"* is precisely the question that failed, and archived items are what answer it.
+- `--case`, `--regex` and `--ids-only` for scripted use. A bad `--regex` exits `2` with the error.
+
+Read-only by contract: no journal entry, no snapshot, no mtime change on the store.
+
+**Reachable from the selector too**, not just as a typed flag - the bare-`waypoints` command menu
+gains a `search` action in its `look` group. A search you can only run by already knowing the flag
+does not reach the person the incident happened to, which is the case the menu exists for. The menu
+still only composes an argv for `main()`, so this is a new action entry and no new store logic.
+
+Tests: 7 CLI checks and 2 menu checks. The first pins the **originating incident** by asserting both
+halves - that grepping the rendered view still misses (a property of a display, not a bug), and that
+`search` finds it - because a test asserting only the second would pass against a view that never
+truncated and so would not pin what went wrong. It also self-checks that the keyword really does sit
+past the cap, so it fails loudly rather than silently stopping to exercise the incident.
+Mutation-tested 5/5: title-only search, truncated output, always-exit-0, ignoring `--archived`, and
+case-sensitive-by-default are each caught.
+
 ## [0.8.0] — 2026-09-07
 
 ### Added
