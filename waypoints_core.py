@@ -1463,3 +1463,27 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=()):
                f"`waypoints.py resolve` releases them." if landed else ".")
         lines.append(_wrap(wl, "  "))
     return "\n".join(lines)
+
+_EVIDENCE_PATTERNS = (
+    r"\b[0-9a-f]{7,40}\b",                 # commit sha
+    r"\b\d+\s*/\s*\d+\b",                 # test count 341/341
+    r"\bv?\d+\.\d+(?:\.\d+)?\b",          # version / tag
+    r"[\w./-]+\.[A-Za-z]{1,6}(?::\d+)?",  # file, optionally file:line
+    r"https?://\S+",                       # URL
+    r"#\d+",                               # issue / PR
+    r"`[^`]+`",                             # a quoted command
+)
+
+
+def points_at_something(text):
+    """True when `text` names something a reader could actually go and open.
+
+    This is the checkable reading of "evidence it can point to". It is deliberately NOT a
+    length check: padding satisfies a minimum-characters rule without adding information, so
+    such a rule would only appear to enforce the requirement. A reference -- a sha, a
+    file:line, a version, a test count, a URL, an issue, or a command -- is the part that lets
+    someone else verify the claim, which is the whole point of recording it.
+    """
+    if not text:
+        return False
+    return any(re.search(p, text) for p in _EVIDENCE_PATTERNS)

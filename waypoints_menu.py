@@ -290,6 +290,18 @@ def a_done(items, arch):
     difference between an archive that answers questions and one that only proves work happened."""
     iid = ask_item([i for i in items if not i.get("done")], "item to close")
     argv = ["done", iid]
+    # EVIDENCE IS REQUIRED by the CLI, so the menu must collect it -- otherwise the
+    # interactive path would build a command the CLI refuses, and the gate would read as the
+    # menu being broken. A blank answer is not an error: it routes to --no-evidence, because
+    # some items genuinely close as duplicates or mistakes and that must be SAYABLE.
+    ev = ask("evidence — what was achieved, pointing at a commit/file/version/test count",
+             default="")
+    if ev:
+        argv += ["--evidence", ev]
+    else:
+        why = ask("no evidence of work — why does it close? (duplicate, superseded, obsolete)",
+                  default="closed from the menu without recorded evidence")
+        argv += ["--no-evidence", why or "closed from the menu without recorded evidence"]
     res = ask("resolution — rewrites the title to the outcome (--as), blank to keep it",
               default="")
     if res:

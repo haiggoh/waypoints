@@ -68,7 +68,7 @@ def test_cli_add_list_done_prune(tmp_path):
     assert "added [do-x]" in add.stdout
     assert "[do-x] Do X" in _run([CLI, "list"], store, "2026-07-12").stdout
     # done removes it from the hook banner
-    _run([CLI, "done", "do-x"], store, "2026-07-12")
+    _run([CLI, "done", "do-x", "--evidence", "closed in test, commit abc1234"], store, "2026-07-12")
     assert _run([HOOK], store, "2026-07-12").stdout.strip() == ""
     # prune MOVES the done item out of the live store (0.4.0: it no longer destroys it)
     _run([CLI, "prune"], store, "2026-07-12")
@@ -144,7 +144,7 @@ def test_cli_edit_clear_surface_on(tmp_path):
 def test_cli_reopen_undoes_done(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Task"], store, "2026-07-15")
-    _run([CLI, "done", "task"], store, "2026-07-15")
+    _run([CLI, "done", "task", "--evidence", "closed in test, commit abc1234"], store, "2026-07-15")
     assert _run([HOOK], store, "2026-07-15").stdout.strip() == ""      # gone once done
     r = _run([CLI, "reopen", "task"], store, "2026-07-15")
     assert r.returncode == 0 and "reopened" in r.stdout
@@ -206,7 +206,7 @@ def test_cli_done_as_rewrites_title_and_closes(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Confirm qwen thinking works"], store, "2026-08-01")
     r = _run([CLI, "done", "confirm-qwen-thinking-works", "--as",
-              "Confirmed: qwen thinking + native tools work"], store, "2026-08-01")
+              "Confirmed: qwen thinking + native tools work", "--evidence", "closed in test, commit abc1234"], store, "2026-08-01")
     assert r.returncode == 0
     lst = _run([CLI, "list"], store, "2026-08-01").stdout
     assert "✓ [confirm-qwen-thinking-works] Confirmed: qwen thinking" in lst  # retitled + done
@@ -217,7 +217,7 @@ def test_cli_done_as_rewrites_title_and_closes(tmp_path):
 def test_cli_done_warns_on_unresolved_title_without_as(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Decide + open the PRs"], store, "2026-08-01")
-    r = _run([CLI, "done", "decide-open-the-prs"], store, "2026-08-01")
+    r = _run([CLI, "done", "decide-open-the-prs", "--evidence", "closed in test, commit abc1234"], store, "2026-08-01")
     assert r.returncode == 0                       # still closes (non-blocking guard)
     assert "marked done" in r.stdout
     assert "⚠️" in r.stderr and "--as" in r.stderr  # nudge on stderr with the fix
@@ -226,7 +226,7 @@ def test_cli_done_warns_on_unresolved_title_without_as(tmp_path):
 def test_cli_done_quiet_when_as_given_on_unresolved_title(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Verify the fix holds"], store, "2026-08-01")
-    r = _run([CLI, "done", "verify-the-fix-holds", "--as", "Verified: fix holds"], store, "2026-08-01")
+    r = _run([CLI, "done", "verify-the-fix-holds", "--as", "Verified: fix holds", "--evidence", "closed in test, commit abc1234"], store, "2026-08-01")
     assert r.returncode == 0
     assert "⚠️" not in r.stderr                     # resolution recorded → no nudge
 
@@ -234,14 +234,14 @@ def test_cli_done_quiet_when_as_given_on_unresolved_title(tmp_path):
 def test_cli_done_quiet_on_plain_imperative_title(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Publish the PR"], store, "2026-08-01")
-    r = _run([CLI, "done", "publish-the-pr"], store, "2026-08-01")
+    r = _run([CLI, "done", "publish-the-pr", "--evidence", "closed in test, commit abc1234"], store, "2026-08-01")
     assert r.returncode == 0
     assert "⚠️" not in r.stderr                     # plain task imperative reads fine as done
 
 
 def test_cli_done_missing_id_still_errors(tmp_path):
     store = tmp_path / "s.json"
-    r = _run([CLI, "done", "nope"], store, "2026-08-01")
+    r = _run([CLI, "done", "nope", "--evidence", "closed in test, commit abc1234"], store, "2026-08-01")
     assert r.returncode == 1 and "no such id" in r.stdout
 
 
@@ -434,15 +434,19 @@ def _seed(tmp_path):
     return store
 
 
-def test_edit_point_refuses_to_discard_existing_bullets(tmp_path):
+def test_edit_point_now_APPENDS_instead_of_refusing(tmp_path):
+    """--point appends, so the OBVIOUS name is the SAFE one.
+
+    It used to REPLACE every bullet, and the guard against that was a refusal plus a
+    longer flag (--add-point) for the safe path. That left the dangerous operation
+    holding the name people reach for first, which is the actual defect: a guard that
+    says "no, type more" still teaches the wrong verb. Now --point and --add-point are
+    the same append, and discarding requires saying --replace-points out loud.
+    """
     store = _seed(tmp_path)
-    r = _run([CLI, "edit", "test-item", "--point", "new only"], store)
-    assert r.returncode == 2, r.stdout
-    assert "refusing to discard 2" in r.stdout
-    # the discarded text is echoed so it stays recoverable from the transcript
-    assert "bullet A" in r.stdout and "bullet B" in r.stdout
-    assert "--add-point" in r.stdout and "--replace-points" in r.stdout
-    assert _bullets(store, "test-item") == ["bullet A", "bullet B"]  # untouched
+    r = _run([CLI, "edit", "test-item", "--point", "bullet C"], store)
+    assert r.returncode == 0, r.stdout
+    assert _bullets(store, "test-item") == ["bullet A", "bullet B", "bullet C"]
 
 
 def test_edit_add_point_appends(tmp_path):
@@ -468,11 +472,134 @@ def test_edit_point_still_works_when_no_bullets_exist(tmp_path):
     assert _bullets(store, "bare-item") == ["first bullet"]
 
 
-def test_edit_rejects_point_and_add_point_together(tmp_path):
+def test_edit_point_and_add_point_together_both_append(tmp_path):
+    """Combining them is no longer an error: they mean the same thing now.
+
+    Previously this had to be rejected because the two flags had OPPOSITE semantics and
+    silently honouring one would have destroyed bullets. With both appending, the
+    combination is unambiguous, so refusing it would be pedantry rather than safety.
+    """
     store = _seed(tmp_path)
     r = _run([CLI, "edit", "test-item", "--point", "x", "--add-point", "y"], store)
-    assert r.returncode == 2
+    assert r.returncode == 0, r.stdout
+    assert _bullets(store, "test-item") == ["bullet A", "bullet B", "x", "y"]
+
+
+def test_replace_points_alone_still_replaces_and_echoes(tmp_path):
+    """The destructive path survives, but must be asked for explicitly."""
+    store = _seed(tmp_path)
+    r = _run([CLI, "edit", "test-item", "--replace-points", "--point", "replaced"], store)
+    assert r.returncode == 0, r.stdout
+    assert "replacing 2" in r.stdout and "bullet A" in r.stdout
+    assert _bullets(store, "test-item") == ["replaced"]
+
+
+def test_rm_point_removes_one_bullet_by_number(tmp_path):
+    """A single wrong bullet must be fixable WITHOUT replacing every bullet.
+
+    Append-only would make a typo permanent, which is why removing --point outright was
+    rejected: the answer to "this one bullet is wrong" cannot be "retype all of them".
+    Numbers are 1-based to match what `show` displays.
+    """
+    store = _seed(tmp_path)
+    r = _run([CLI, "edit", "test-item", "--rm-point", "1"], store)
+    assert r.returncode == 0, r.stdout
+    assert _bullets(store, "test-item") == ["bullet B"]
+
+
+def test_set_point_rewrites_one_bullet_in_place(tmp_path):
+    store = _seed(tmp_path)
+    r = _run([CLI, "edit", "test-item", "--set-point", "2", "bullet B corrected"], store)
+    assert r.returncode == 0, r.stdout
+    assert _bullets(store, "test-item") == ["bullet A", "bullet B corrected"]
+
+
+def test_targeted_bullet_edits_reject_out_of_range(tmp_path):
+    """An out-of-range index must FAIL LOUDLY, never silently no-op or wipe the list."""
+    store = _seed(tmp_path)
+    for args in (["--rm-point", "9"], ["--set-point", "9", "x"], ["--rm-point", "0"]):
+        r = _run([CLI, "edit", "test-item", *args], store)
+        assert r.returncode == 2, (args, r.stdout)
+        assert "out of range" in r.stdout or "1-based" in r.stdout
+        assert _bullets(store, "test-item") == ["bullet A", "bullet B"]
+
+
+def test_done_refuses_without_evidence(tmp_path):
+    """`done` must REFUSE unless the close records what was achieved.
+
+    Prose in a skill cannot bind: a model can always skip a guideline, but it cannot skip a
+    non-zero exit. So the gate lives in the command.
+    """
+    store = _seed(tmp_path)
+    r = _run([CLI, "done", "test-item"], store)
+    assert r.returncode == 2, r.stdout
+    out = r.stdout + r.stderr
+    assert "evidence" in out.lower()
+    # It must still be OPEN: a refused close that half-closed would be worse than no gate.
     assert _bullets(store, "test-item") == ["bullet A", "bullet B"]
+    data = json.loads(store.read_text())
+    it = [i for i in data["items"] if i["id"] == "test-item"][0]
+    assert not it.get("done")
+
+
+def test_done_accepts_evidence_with_a_concrete_reference(tmp_path):
+    store = _seed(tmp_path)
+    r = _run([CLI, "done", "test-item", "--evidence",
+              "shipped in 0.18.0, commit 7bf87b1, tests 341/341 green"], store)
+    assert r.returncode == 0, r.stdout
+    data = json.loads(store.read_text())
+    it = [i for i in data["items"] if i["id"] == "test-item"][0]
+    assert it.get("done")
+    # The evidence is preserved on the item, so the archive says WHY it closed.
+    assert any("7bf87b1" in b for b in it.get("summary", []))
+
+
+def test_done_rejects_an_offhand_comment_without_a_reference(tmp_path):
+    """THE HARD PART, and the reason a length check is not enough.
+
+    The user's requirement was explicit: the evidence "can't just be an off-hand comment, it
+    has to be real work or substantial existing evidence it can point to". A minimum-characters
+    gate is trivially satisfied by padding, so it only LOOKS like it implements this. The
+    checkable meaning of "evidence it can point to" is a CONCRETE REFERENCE: a commit sha, a
+    file:line, a version/tag, a test count, or a command. Assert that padding alone fails.
+    """
+    store = _seed(tmp_path)
+    for weak in ("done", "all good now", "finished this, it works fine and everything passes"):
+        r = _run([CLI, "done", "test-item", "--evidence", weak], store)
+        assert r.returncode == 2, (weak, r.stdout)
+        out = (r.stdout + r.stderr).lower()
+        assert "point at" in out or "off-hand" in out
+        data = json.loads(store.read_text())
+        it = [i for i in data["items"] if i["id"] == "test-item"][0]
+        assert not it.get("done"), weak
+
+
+def test_done_evidence_gate_can_be_overridden_explicitly(tmp_path):
+    """An escape hatch is REQUIRED, or the gate blocks legitimate closes.
+
+    Some items close because they became irrelevant, were duplicates, or were mistakes -- there
+    is no commit to point at. That must be SAYABLE, not impossible: --no-evidence closes with a
+    recorded reason, so the archive still explains itself instead of the gate being worked
+    around by hand-editing the store.
+    """
+    store = _seed(tmp_path)
+    r = _run([CLI, "done", "test-item", "--no-evidence", "superseded by another item"], store)
+    assert r.returncode == 0, r.stdout
+    data = json.loads(store.read_text())
+    it = [i for i in data["items"] if i["id"] == "test-item"][0]
+    assert it.get("done")
+    assert any("superseded" in b for b in it.get("summary", []))
+
+
+def test_rm_and_toggle_are_not_blocked_by_the_evidence_gate(tmp_path):
+    """The gate is about CLAIMING completion, not about tidying.
+
+    `rm` archives a stray/mistaken item and `toggle` flips state -- neither asserts that work
+    was done, so gating them would make the store harder to keep honest, not easier.
+    """
+    store = _seed(tmp_path)
+    r = _run([CLI, "rm", "test-item"], store)
+    assert r.returncode == 0, r.stdout
 
 
 def test_clear_summary_echoes_what_it_dropped(tmp_path):
@@ -529,7 +656,7 @@ def test_prune_archives_rather_than_destroying(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Keep me"], store, "2026-08-27")
     _run([CLI, "add", "Close me"], store, "2026-08-27")
-    _run([CLI, "done", "close-me"], store, "2026-08-27")
+    _run([CLI, "done", "close-me", "--evidence", "closed in test, commit abc1234"], store, "2026-08-27")
     _run([CLI, "prune"], store, "2026-08-27")
     # the item left the live store AND arrived in the archive — asserted on both files
     assert _ids(store) == ["keep-me"]
@@ -542,7 +669,7 @@ def test_prune_archives_rather_than_destroying(tmp_path):
 def test_prune_is_idempotent_and_does_not_duplicate_the_archive(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Close me"], store, "2026-08-27")
-    _run([CLI, "done", "close-me"], store, "2026-08-27")
+    _run([CLI, "done", "close-me", "--evidence", "closed in test, commit abc1234"], store, "2026-08-27")
     _run([CLI, "prune"], store, "2026-08-27")
     _run([CLI, "restore", "close-me"], store, "2026-08-27")
     _run([CLI, "prune"], store, "2026-08-28")
@@ -565,7 +692,7 @@ def test_rm_delete_without_confirm_refuses_and_changes_nothing(tmp_path):
     # must make THIS test fail.
     store = tmp_path / "s.json"
     _run([CLI, "add", "Close me"], store, "2026-08-27")
-    _run([CLI, "done", "close-me"], store, "2026-08-27")
+    _run([CLI, "done", "close-me", "--evidence", "closed in test, commit abc1234"], store, "2026-08-27")
     _run([CLI, "prune"], store, "2026-08-27")
     before = _read(_archive_file(store))
     r = _run([CLI, "rm", "close-me", "--delete"], store, "2026-08-27")
@@ -578,7 +705,7 @@ def test_rm_delete_confirm_destroys_only_from_the_archive(tmp_path):
     store = tmp_path / "s.json"
     for title in ("Close me", "Keep me"):
         _run([CLI, "add", title], store, "2026-08-27")
-        _run([CLI, "done", title.lower().replace(" ", "-")], store, "2026-08-27")
+        _run([CLI, "done", title.lower().replace(" ", "-"), "--evidence", "closed in test, commit abc1234"], store, "2026-08-27")
     _run([CLI, "prune"], store, "2026-08-27")
     r = _run([CLI, "rm", "close-me", "--delete", "--confirm"], store, "2026-08-27")
     assert r.returncode == 0
@@ -598,7 +725,7 @@ def test_rm_delete_refuses_a_live_item_and_prints_the_two_step(tmp_path):
 def test_reopen_auto_restores_from_the_archive_in_one_step(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Premature close"], store, "2026-08-27")
-    _run([CLI, "done", "premature-close"], store, "2026-08-27")
+    _run([CLI, "done", "premature-close", "--evidence", "closed in test, commit abc1234"], store, "2026-08-27")
     _run([CLI, "prune"], store, "2026-08-27")
     r = _run([CLI, "reopen", "premature-close"], store, "2026-08-28")
     assert r.returncode == 0
@@ -616,7 +743,7 @@ def test_reopen_and_restore_keep_archived_at(tmp_path):
     # The trail must carry WHEN it closed; a restore adds a fact, it does not erase one.
     store = tmp_path / "s.json"
     _run([CLI, "add", "Round trip"], store, "2026-08-27")
-    _run([CLI, "done", "round-trip"], store, "2026-08-27")
+    _run([CLI, "done", "round-trip", "--evidence", "closed in test, commit abc1234"], store, "2026-08-27")
     _run([CLI, "prune"], store, "2026-08-27")
     _run([CLI, "reopen", "round-trip"], store, "2026-08-28")
     item = _read(store)["items"][0]
@@ -627,7 +754,7 @@ def test_reopen_and_restore_keep_archived_at(tmp_path):
 def test_restore_brings_it_back_still_done(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Closed thing"], store, "2026-08-27")
-    _run([CLI, "done", "closed-thing"], store, "2026-08-27")
+    _run([CLI, "done", "closed-thing", "--evidence", "closed in test, commit abc1234"], store, "2026-08-27")
     _run([CLI, "prune"], store, "2026-08-27")
     r = _run([CLI, "restore", "closed-thing"], store, "2026-08-28")
     assert r.returncode == 0
@@ -639,7 +766,7 @@ def test_restore_brings_it_back_still_done(tmp_path):
 def test_restore_refuses_when_the_id_is_already_live(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Same name"], store, "2026-08-27")
-    _run([CLI, "done", "same-name"], store, "2026-08-27")
+    _run([CLI, "done", "same-name", "--evidence", "closed in test, commit abc1234"], store, "2026-08-27")
     _run([CLI, "prune"], store, "2026-08-27")
     _run([CLI, "add", "Same name"], store, "2026-08-28")  # mints the same slug
     r = _run([CLI, "restore", "same-name"], store, "2026-08-28")
@@ -651,10 +778,10 @@ def test_reopen_prefers_the_live_copy_and_warns_about_the_archived_namesake(tmp_
     # ids are slugs, so a new item can mint an id the archive already holds.
     store = tmp_path / "s.json"
     _run([CLI, "add", "Same name"], store, "2026-08-27")
-    _run([CLI, "done", "same-name"], store, "2026-08-27")
+    _run([CLI, "done", "same-name", "--evidence", "closed in test, commit abc1234"], store, "2026-08-27")
     _run([CLI, "prune"], store, "2026-08-27")
     _run([CLI, "add", "Same name"], store, "2026-08-28")
-    _run([CLI, "done", "same-name"], store, "2026-08-28")
+    _run([CLI, "done", "same-name", "--evidence", "closed in test, commit abc1234"], store, "2026-08-28")
     r = _run([CLI, "reopen", "same-name"], store, "2026-08-29")
     assert r.returncode == 0
     assert "archived item with the same id" in r.stderr  # named, not silently disambiguated
@@ -666,7 +793,7 @@ def test_archive_list_and_show_read_the_trail(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Trail item", "--point", "a bullet", "--detail", "the long dump"],
          store, "2026-08-27")
-    _run([CLI, "done", "trail-item"], store, "2026-08-27")
+    _run([CLI, "done", "trail-item", "--evidence", "closed in test, commit abc1234"], store, "2026-08-27")
     _run([CLI, "prune"], store, "2026-08-27")
     lst = _run([CLI, "archive", "list"], store, "2026-08-28")
     assert "trail-item" in lst.stdout and "archived 2026-08-27" in lst.stdout
@@ -680,7 +807,7 @@ def test_archive_list_json_emits_the_documented_contract(tmp_path):
     # test that only checked the exit code of `archive list` would never have caught it.
     store = tmp_path / "s.json"
     _run([CLI, "add", "Trail item"], store, "2026-08-27")
-    _run([CLI, "done", "trail-item"], store, "2026-08-27")
+    _run([CLI, "done", "trail-item", "--evidence", "closed in test, commit abc1234"], store, "2026-08-27")
     _run([CLI, "prune"], store, "2026-08-27")
     r = _run([CLI, "archive", "list", "--json"], store, "2026-08-28")
     assert r.returncode == 0, r.stderr
@@ -753,7 +880,7 @@ def test_every_mutating_command_leaves_a_journal_entry(tmp_path):
         ["priority", "one", "5"],
         ["reorder", "two", "0"],
         ["triage", "one", "--tier", "do-now"],
-        ["done", "two"],
+        ["done", "two", "--evidence", "closed in test, commit abc1234"],
         ["reopen", "two"],
         ["toggle", "two"],
         ["prune"],
@@ -771,7 +898,7 @@ def test_every_mutating_command_leaves_a_journal_entry(tmp_path):
 def test_journal_records_the_before_and_after_of_the_touched_item(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Fix the thing"], store, "2026-08-27")
-    _run([CLI, "done", "fix-the-thing", "--as", "Fixed the thing"], store, "2026-08-27")
+    _run([CLI, "done", "fix-the-thing", "--as", "Fixed the thing", "--evidence", "closed in test, commit abc1234"], store, "2026-08-27")
     entry = _jlines(store)[-1]
     change = [ch for ch in entry["changes"] if ch["id"] == "fix-the-thing"][0]
     assert change["before"]["done"] is False and change["before"]["title"] == "Fix the thing"
@@ -1058,7 +1185,7 @@ def test_triage_warns_when_the_named_target_does_not_exist(tmp_path):
 def test_closing_a_target_releases_what_waited_on_it(tmp_path):
     store = tmp_path / "s.json"
     _seed_tiers(store)
-    r = _run([CLI, "done", "decide-the-matrix"], store, "2026-08-31")
+    r = _run([CLI, "done", "decide-the-matrix", "--evidence", "closed in test, commit abc1234"], store, "2026-08-31")
     assert "released 1 item(s)" in r.stdout and "phase-3-migration" in r.stdout
     assert "UNTRIAGED on purpose" in r.stdout
     j = json.loads(_run([CLI, "list", "--json"], store, "2026-08-31").stdout)
@@ -1222,10 +1349,10 @@ def test_waiting_on_is_repeatable_on_the_command_line(tmp_path):
     assert dep["waiting_on"] == ["target-a @ its API freezes",
                                  "target-b @ the matrix is decided"]
     # Closing ONE of the two must not release it.
-    _run([CLI, "done", "target-a"], store, "2026-09-01")
+    _run([CLI, "done", "target-a", "--evidence", "closed in test, commit abc1234"], store, "2026-09-01")
     j = json.loads(_run([CLI, "list", "--json"], store, "2026-09-01").stdout)
     assert [i for i in j["items"] if i["id"] == "dependent"][0]["tier"] == "waiting"
-    r = _run([CLI, "done", "target-b"], store, "2026-09-01")
+    r = _run([CLI, "done", "target-b", "--evidence", "closed in test, commit abc1234"], store, "2026-09-01")
     assert "released 1 item(s)" in r.stdout
 
 
@@ -1417,7 +1544,7 @@ def test_search_scopes_open_and_archived_separately(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "Archivable thing"], store)
     sid = json.loads(store.read_text())["items"][0]["id"]
-    _run([CLI, "done", sid], store)
+    _run([CLI, "done", sid, "--evidence", "closed in test, commit abc1234"], store)
     _run([CLI, "prune"], store)
 
     assert _run([CLI, "search", "Archivable"], store).returncode == 1          # not in open
