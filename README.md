@@ -75,9 +75,13 @@ which is one document whose single botched escape makes every item unreadable at
 waypoints.py list
 waypoints.py add "Publish the PR" --point "branch fix/x" --point "re-verify first" --detail "see repo X" --surface-on 2026-07-13
 waypoints.py edit adobe-publish --title "Publish the PR (rebased)" --add-point "branch fix/x2"   # APPENDS
+waypoints.py edit adobe-publish --point "another bullet"                                        # APPENDS (safe default)
+waypoints.py edit adobe-publish --set-point 2 "fixed typo"                                      # rewrite ONE bullet
+waypoints.py edit adobe-publish --rm-point 2                                                    # remove ONE bullet
 waypoints.py edit adobe-publish --replace-points --point "only bullet now"                       # REPLACES (must be explicit)
 waypoints.py show adobe-publish     # title + summary + full detail — the "pick it up" view
-waypoints.py done adobe-publish
+waypoints.py done adobe-publish --evidence "shipped in 1.4.2, commit a1b2c3d, tests 88/88"
+waypoints.py done adobe-publish --no-evidence "superseded by adobe-upstream"   # no work to point at
 waypoints.py reopen adobe-publish   # undo a mistaken done
 waypoints.py toggle adobe-publish   # flip done state in one call
 waypoints.py priority adobe-publish 5   # bump it ahead of others in the banner

@@ -104,8 +104,9 @@ waypoints.py resolve                 # release waiting items whose target landed
 waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on YYYY-MM-DD]
 waypoints.py edit <id> [--title "…"] [--add-point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on]
 #   --add-point APPENDS a bullet, keeping the existing ones — this is what you want when recording new information.
-#   --point REPLACES the entire bullet list. It is REFUSED when the item already has bullets unless you
-#   also pass --replace-points; the refusal prints the bullets it would have discarded.
+#   --point APPENDS a bullet, keeping the existing ones (--add-point is an alias). Only
+#   --replace-points discards the whole list, and it echoes what it dropped. To fix a single
+#   wrong bullet use --set-point N "…" or --rm-point N (1-based, as `show` numbers them).
 waypoints.py show <id>                  # print title + summary + full detail (the "pick it up" view)
 waypoints.py search "kw" [--all]         # find items by keyword: title, bullets AND detail.
                                          # ALWAYS use this to answer "is this already tracked?" --
@@ -113,7 +114,10 @@ waypoints.py search "kw" [--all]         # find items by keyword: title, bullets
                                          # title truncation and reads as a genuine absence (it
                                          # caused a real duplicate). --all includes archived, which
                                          # is what answers "was this EVER tracked?".
-waypoints.py done <id> [--as "outcome"] # mark done; --as rewrites the title to the resolution
+waypoints.py done <id> --evidence "…commit <sha>, tests N/N"  # REQUIRED: what was achieved + a
+#                                         concrete reference. An off-hand comment is REFUSED.
+waypoints.py done <id> --no-evidence "superseded by <id>"     # closes without work evidence
+waypoints.py done <id> [--as "outcome"] # --as rewrites the title to the resolution
 waypoints.py reopen <id>                # undo done (inverse of `done`)
 waypoints.py toggle <id>                # flip an item's done state in one call
 waypoints.py priority <id> <level>      # int; higher sorts earlier in the banner (default 0)
@@ -185,7 +189,7 @@ The bare command is **`waypoints.py`** — that's the shipped filename; note the
 ## When to act
 
 - **You see the `waypoints:` startup banner** → those are the user's open items. Help progress the
-  relevant one(s); when one is genuinely finished, mark it done (`waypoints.py done <id>`).
+  relevant one(s); when one is genuinely finished, mark it done (`waypoints.py done <id> --evidence "…"` — evidence is required and must point at something concrete).
 - **You create a follow-up** the user should not lose (a deferred task, a blocked item, a "later"
   decision) → `add` it, with a `--surface-on` date if it only becomes relevant later.
 - **Session wrap-up** → reconcile the store *against itself*: `done` what's finished, `edit` titles

@@ -5,6 +5,49 @@ All notable changes to `waypoints` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-09-21
+
+### Changed (BREAKING) — `--point` now APPENDS; only `--replace-points` discards
+
+`edit --point` used to REPLACE every bullet. It was guarded by a refusal plus a longer flag
+(`--add-point`) for the safe path — but that left the **destructive** operation holding the
+name people reach for first, which is the defect rather than the fix: a guard that says "no,
+type more" still teaches the wrong verb.
+
+- `--point` and `--add-point` are now the **same append**. Combining them is no longer an
+  error, since they no longer mean opposite things
+- `--replace-points` is the only destructive path and must be passed explicitly; it still
+  echoes what it discarded
+- **new** `--set-point N "TEXT"` rewrites one bullet in place, and `--rm-point N` removes one
+  (1-based, as `show` numbers them). Append-only would have made a typo permanent, so removing
+  `--point` outright was rejected: the answer to "this one bullet is wrong" must not be "retype
+  all of them". An out-of-range index fails loudly rather than no-opping or clamping
+
+### Added (BREAKING) — `done` now REQUIRES evidence of what was achieved
+
+Closing an item silently is how a store fills up with ✓ marks that no longer explain
+themselves. `done` now refuses unless the close records the work:
+
+- `--evidence "…"` — what was achieved, **pointing at something concrete**: a commit sha,
+  `file:line`, a version/tag, a test count, a command, a URL, or an issue/PR. Recorded as a
+  `CLOSED:` bullet, so the archive says *why* each item closed
+- `--no-evidence "REASON"` — closes without work evidence (duplicate, superseded, obsolete,
+  mistake), recording the reason. An escape hatch is **required**: without one the gate would
+  block legitimate closes and get worked around by hand-editing the store
+- the interactive menu prompts for evidence, so the menu never builds a command the CLI refuses
+- `rm` and `toggle` are deliberately **not** gated — they tidy, they do not claim completion
+
+A refusal rather than a nudge on purpose: prose in a skill or banner can be skipped, a non-zero
+exit cannot. And the check is for a **reference**, not a length — a minimum-characters rule is
+satisfied by padding, so it would only *look* like it enforced "real work or substantial
+existing evidence it can point to".
+
+### Migration
+
+Callers passing a bare `waypoints.py done <id>` must add `--evidence` or `--no-evidence`. The
+banner, skill and README now teach the new form. Anything that closes items programmatically
+(e.g. an end-of-session reconciliation) needs the same update.
+
 ## [0.9.0] - 2026-09-10
 
 ### Added - `waypoints search`: search the STORE, not a rendered view

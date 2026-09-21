@@ -177,13 +177,28 @@ def test_add_omits_flags_that_were_left_blank(monkeypatch):
 
 def test_done_offers_the_resolution_retitle(monkeypatch):
     items = [_item("alpha", "Should we do X?")]
-    calls, _ = drive(monkeypatch, ["done", "1", "X was done, and here is how", "q"], items=items)
-    assert calls == [["done", "alpha", "--as", "X was done, and here is how"]]
+    calls, _ = drive(monkeypatch, ["done", "1", "shipped, commit abc1234",
+                                   "X was done, and here is how", "q"], items=items)
+    assert calls == [["done", "alpha", "--evidence", "shipped, commit abc1234",
+                      "--as", "X was done, and here is how"]]
 
 
 def test_done_without_a_resolution_keeps_the_title(monkeypatch):
-    calls, _ = drive(monkeypatch, ["done", "1", "", "q"], items=[_item("alpha", "Alpha")])
-    assert calls == [["done", "alpha"]]
+    calls, _ = drive(monkeypatch, ["done", "1", "shipped, commit abc1234", "", "q"],
+                     items=[_item("alpha", "Alpha")])
+    assert calls == [["done", "alpha", "--evidence", "shipped, commit abc1234"]]
+
+
+def test_menu_asks_for_evidence_because_the_cli_now_requires_it(monkeypatch):
+    """The interactive close must collect what the CLI demands.
+
+    Without this the menu would build a bare `done` and the CLI would refuse it -- the gate
+    would read as the menu being broken. Leaving evidence BLANK must route to --no-evidence
+    rather than producing a command that cannot succeed.
+    """
+    calls, _ = drive(monkeypatch, ["done", "1", "", "", "q"], items=[_item("alpha", "Alpha")])
+    assert calls and calls[0][0] == "done"
+    assert "--evidence" in calls[0] or "--no-evidence" in calls[0]
 
 
 def test_item_can_be_chosen_by_id_as_well_as_number(monkeypatch):
@@ -202,8 +217,8 @@ def test_done_picker_excludes_already_done_items(monkeypatch):
     """Offering a done item under 'mark done' wastes the pick and, worse, makes the numbering
     disagree with what the user is looking at."""
     items = [_item("closed", "Closed", done=True), _item("open1", "Open one")]
-    calls, _ = drive(monkeypatch, ["done", "1", "", "q"], items=items)
-    assert calls == [["done", "open1"]]
+    calls, _ = drive(monkeypatch, ["done", "1", "", "", "", "q"], items=items)
+    assert calls == [["done", "open1", "--no-evidence", "closed from the menu without recorded evidence"]]
 
 
 def test_triage_waiting_builds_the_target_at_milestone_spec(monkeypatch):
@@ -304,8 +319,10 @@ def test_reopen_pool_spans_done_and_archived(monkeypatch):
 def test_loop_stays_open_for_a_maintenance_pass(monkeypatch):
     """The reason to open this at all is several actions in a row — close a couple, then prune."""
     items = [_item("alpha", "A"), _item("beta", "B")]
-    calls, _ = drive(monkeypatch, ["done", "1", "", "done", "2", "", "q"], items=items)
-    assert calls == [["done", "alpha"], ["done", "beta"]]
+    calls, _ = drive(monkeypatch, ["done", "1", "", "", "", "done", "2", "", "", "", "q"],
+                     items=items)
+    assert calls == [["done", "alpha", "--no-evidence", "closed from the menu without recorded evidence"],
+                     ["done", "beta", "--no-evidence", "closed from the menu without recorded evidence"]]
 
 
 def test_a_command_that_exits_nonzero_does_not_end_the_session(monkeypatch):

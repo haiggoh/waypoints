@@ -19,7 +19,7 @@ hand either: run `waypoints.py recover`.
                         [--gate-reason "…"] [--waiting-on "<item-id> @ <milestone>"] [--clear]
     waypoints add "Title" [--point "…" ...] [--detail ...] [--surface-on YYYY-MM-DD]
     waypoints edit <id> [--title …] [--add-point "…" ...] [--clear-summary] [--detail …]
-                                         # --add-point APPENDS; --point REPLACES (guarded)
+                                         # --point/--add-point both APPEND; --replace-points discards
                         [--surface-on YYYY-MM-DD] [--clear-surface-on]
     waypoints show <id>                  # print title + summary + full detail (the "pick it up" view)
     waypoints search "kw" [--all|--archived] [--case] [--regex] [--ids-only]
@@ -472,14 +472,18 @@ def main(argv=None):
     pe.add_argument("id")
     pe.add_argument("--title", default=None, help="new title (does NOT change the id)")
     pe.add_argument("--point", action="append", default=None,
-                    help="REPLACE every summary bullet (destructive). Refuses when the item already "
-                         "has bullets unless --replace-points is also given. To keep the existing "
-                         "bullets and add one, use --add-point instead")
+                    help="append a summary bullet, KEEPING the existing ones (repeatable). "
+                         "Identical to --add-point: the obvious name is the SAFE one")
     pe.add_argument("--add-point", action="append", default=None, metavar="POINT",
-                    help="append a summary bullet, KEEPING the existing ones (safe; repeatable). "
-                         "This is almost always what you want when recording new information")
+                    help="append a summary bullet (alias of --point, kept for existing habits "
+                         "and scripts)")
     pe.add_argument("--replace-points", action="store_true",
-                    help="confirm that --point may discard the item's existing bullets")
+                    help="DESTRUCTIVE: discard every existing bullet and use only the ones given "
+                         "here. Must be passed explicitly; the discarded text is echoed first")
+    pe.add_argument("--rm-point", default=None, metavar="N",
+                    help="remove bullet N (1-based, as shown by `show`) without touching the rest")
+    pe.add_argument("--set-point", nargs=2, default=None, metavar=("N", "TEXT"),
+                    help="rewrite bullet N (1-based) in place, e.g. to fix a typo")
     pe.add_argument("--clear-summary", action="store_true", help="remove all summary bullets")
     pe.add_argument("--detail", default=None, help="new detail; pass \"\" to clear it")
     pe.add_argument("--surface-on", default=None, help="set the earliest-surface date (YYYY-MM-DD)")
@@ -505,6 +509,14 @@ def main(argv=None):
     pd.add_argument("--as", dest="resolved", default=None, metavar="RESOLUTION",
                     help="rewrite the title to this resolution phrasing while closing (one call "
                          "instead of edit+done); use it when the title reads as an open question")
+    pd.add_argument("--evidence", default=None, metavar="TEXT",
+                    help="REQUIRED to close: what was achieved and why this is done, pointing at "
+                         "something concrete (commit sha, file:line, version/tag, test count, or a "
+                         "command + its result). Recorded as a bullet so the archive says WHY it "
+                         "closed. An off-hand comment with no reference is refused")
+    pd.add_argument("--no-evidence", default=None, metavar="REASON",
+                    help="close WITHOUT evidence of work, giving the reason instead (duplicate, "
+                         "superseded, obsolete, mistake). The reason is recorded")
 
     pr = sub.add_parser("reopen", help="undo done on an item by id (inverse of `done`)")
     pr.add_argument("id")
@@ -768,28 +780,61 @@ def main(argv=None):
         if args.title is not None:
             kwargs["title"] = args.title
         if args.clear_summary:
-            if args.point or args.add_point:
-                print("--clear-summary cannot be combined with --point/--add-point")
+            if args.point or args.add_point or args.rm_point is not None or args.set_point is not None:
+                print("--clear-summary cannot be combined with --point/--add-point/"
+                      "--rm-point/--set-point")
                 return 2
             if old_points:
                 _echo_discarded("clearing")
             kwargs["summary"] = []
-        elif args.add_point:
-            if args.point:
-                print("pass either --point (replace) or --add-point (append), not both")
+        elif args.rm_point is not None or args.set_point is not None:
+            # TARGETED single-bullet edits. These exist so that append-only does not make a
+            # typo permanent: the answer to "one bullet is wrong" must not be "retype them
+            # all". An out-of-range index FAILS LOUDLY -- silently no-opping would look like
+            # success, and silently clamping would edit the wrong bullet.
+            if args.point or args.add_point or args.replace_points:
+                print("--rm-point/--set-point edit one bullet; do not combine them with "
+                      "--point/--add-point/--replace-points")
                 return 2
-            kwargs["summary"] = old_points + list(args.add_point)
-        elif args.point is not None:
-            if old_points and not args.replace_points:
-                print(f"refusing to discard {len(old_points)} summary bullet(s) on [{args.id}].")
-                print("  --point REPLACES the whole bullet list; it does not append.")
-                _echo_discarded("  would discard")
-                print("  To add to them:      --add-point \"…\"")
-                print("  To really replace:   --replace-points --point \"…\"")
+            if args.rm_point is not None and args.set_point is not None:
+                print("pass either --rm-point or --set-point, not both")
+                return 2
+            raw = args.rm_point if args.rm_point is not None else args.set_point[0]
+            try:
+                n = int(raw)
+            except ValueError:
+                print(f"bullet number must be an integer (1-based), got {raw!r}")
+                return 2
+            if n < 1 or n > len(old_points):
+                print(f"bullet {n} is out of range on [{args.id}]: it has "
+                      f"{len(old_points)} bullet(s), numbered 1-based.")
+                for i, point in enumerate(old_points, 1):
+                    print(f"    {i}. {point}")
+                return 2
+            new_points = list(old_points)
+            if args.rm_point is not None:
+                print(f"removing bullet {n}: {new_points[n - 1]}")
+                del new_points[n - 1]
+            else:
+                print(f"replacing bullet {n}: {new_points[n - 1]}")
+                new_points[n - 1] = args.set_point[1]
+            kwargs["summary"] = new_points
+        elif args.replace_points:
+            # The ONLY destructive path, and it must be asked for by name.
+            replacement = (args.point or []) + (args.add_point or [])
+            if not replacement:
+                print("--replace-points needs at least one --point to replace them with "
+                      "(use --clear-summary to remove every bullet)")
                 return 2
             if old_points:
                 _echo_discarded("replacing")
-            kwargs["summary"] = list(args.point)
+            kwargs["summary"] = replacement
+        elif args.point or args.add_point:
+            # --point and --add-point are now the SAME append. The old --point REPLACED every
+            # bullet, and guarding that with a refusal still left the destructive operation
+            # holding the name people reach for first -- which is the defect, not the fix.
+            # Combining them is therefore harmless rather than an error.
+            kwargs["summary"] = old_points + list(args.point or []) + list(args.add_point or [])
         if args.detail is not None:
             kwargs["detail"] = args.detail
         if args.clear_surface_on:
@@ -892,6 +937,38 @@ def main(argv=None):
 
     if args.cmd == "done":
         it = c.get_item(items, args.id)
+        # ---- EVIDENCE GATE ------------------------------------------------------------
+        # An item may only be closed with a statement of what was achieved. This is a REFUSAL
+        # rather than a nudge on purpose: guidance in a skill or a banner can be skipped, a
+        # non-zero exit cannot. Checked BEFORE mark_done so a refused close leaves the item
+        # fully open -- a half-applied close would be worse than no gate at all.
+        #
+        # The check is for a CONCRETE REFERENCE, not for length. A minimum-characters rule is
+        # satisfied by padding, so it would only look like it implements "real work or
+        # substantial existing evidence it can point to"; what makes evidence checkable is that
+        # it POINTS somewhere. Deliberately generous about the form (sha, path, version, test
+        # count, command, URL, issue/PR) because being strict here would push people to
+        # --no-evidence, which loses more information than a loosely-formatted reference.
+        if it is not None and not it.get("done"):
+            if args.evidence is None and args.no_evidence is None:
+                print(f"refusing to close [{args.id}] without evidence of what was achieved.")
+                print("  Say what was done and point at something concrete:")
+                print(f'    waypoints.py done {args.id} --evidence "…, commit <sha>, tests N/N"')
+                print("  If it closes for another reason (duplicate, superseded, obsolete):")
+                print(f'    waypoints.py done {args.id} --no-evidence "superseded by <id>"')
+                return 2
+            if args.evidence is not None and args.no_evidence is not None:
+                print("pass either --evidence or --no-evidence, not both")
+                return 2
+            if args.evidence is not None and not c.points_at_something(args.evidence):
+                print(f"that evidence does not point at anything checkable: {args.evidence!r}")
+                print("  It reads as an off-hand comment. Name something a reader could open:")
+                print("    a commit sha, file:line, a version/tag, a test count, a command, a URL.")
+                print(f'  Or close it as unevidenced:  --no-evidence "<why it closes anyway>"')
+                return 2
+            note = (f"CLOSED: {args.evidence}" if args.evidence is not None
+                    else f"CLOSED WITHOUT EVIDENCE OF WORK: {args.no_evidence}")
+            c.edit_item(items, args.id, summary=list(it.get("summary") or []) + [note])
         ok = c.mark_done(items, args.id, resolved_title=args.resolved)
         c.save_store(store)
         if not ok:
