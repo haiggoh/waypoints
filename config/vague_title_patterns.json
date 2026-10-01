@@ -1,0 +1,65 @@
+{
+  "vague_title_patterns": [
+    {
+      "pattern": "^(fix|update|change|modify|adjust|tweak|work on|look into|investigate|check|review)\\s+(it|this|that|something|things|stuff|up|out|down|dependencies|deps)\\s*$",
+      "description": "Verb + vague object (it, this, that, something, things, stuff, etc.) - includes phrasal verbs like clean up, fix up, sort out, set up"
+    },
+    {
+      "pattern": "^(improve|optimize|refactor|clean\\s+up|cleanup|fix\\s+up)\\s+(it|this|that|something|things|stuff|up|out)\\s*$",
+      "description": "Improve/optimize/refactor/clean up/fix up + vague object"
+    },
+    {
+      "pattern": "^(handle|deal with|address|resolve|sort\\s+out)\\s+(it|this|that|something|things|stuff|up|out)\\s*$",
+      "description": "Handle/deal with/address/resolve/sort out + vague object"
+    },
+    {
+      "pattern": "^(make|create|add|build|implement|write|do)\\s+(it|this|that|something|things|stuff|up|out)\\s*$",
+      "description": "Make/create/add/build/implement/write/do + vague object"
+    },
+    {
+      "pattern": "^(fix|debug|solve|resolve)\\s+(it|this|that|bug|issue)\\s*$",
+      "description": "Fix/debug/solve/resolve + vague object (it/this/that/bug/issue)"
+    },
+    {
+      "pattern": "^(update|upgrade|bump|patch)\\s+(it|this|that|version|dep|dependency|dependencies|deps)\\s*$",
+      "description": "Update/upgrade/bump/patch + vague object"
+    },
+    {
+      "pattern": "^(remove|delete|drop|kill)\\s+(it|this|that|code|file)\\s*$",
+      "description": "Remove/delete/drop/kill + vague object"
+    },
+    {
+      "pattern": "^(test|check|verify|validate)\\s+(it|this|that)\\s*$",
+      "description": "Test/check/verify/validate + vague object"
+    },
+    {
+      "pattern": "^(review|audit|scan|scan for)\\s+(it|this|that|something|things|stuff)\\s*$",
+      "description": "Review/audit/scan + vague object"
+    },
+    {
+      "pattern": "^(some|several|various|multiple|many|a few)\\s+(fix|change|update|improvement|issue|bug|task)s?\\s*$",
+      "description": "Quantifier + vague noun (fix/change/update/improvement/issue/bug/task)"
+    },
+    {
+      "pattern": "^(various|assorted|misc|miscellaneous|random)\\s+(fix|change|update|task|item)s?\\s*$",
+      "description": "Various/assorted/misc + vague noun"
+    },
+    {
+      "pattern": "^(fix|fixes|fixing|update|updates|updating|change|changes|changing)\\s+(it|this|that)\\s*$",
+      "description": "Verb forms with vague object (it/this/that)"
+    },
+    {
+      "pattern": "^(misc|todo|tbd|wip|in progress|ongoing)\\s*:?",
+      "description": "Misc/todo/tbd/wip/in progress/ongoing"
+    },
+    {
+      "pattern": "^(fix|update|change|improve|refactor|clean|test|review|check|verify|fixes|fixing|updates|updating|changes|changing|updates|upgrading|bumping|patching|do|test|check|verify|review|audit|scan)\\s*$",
+      "description": "Standalone verb forms that are vague without object"
+    },
+    {
+      "pattern": "^(fixes|fixing|updates|updating|changes|changing|improvements|refactoring|cleaning|testing|reviewing|checking|verifying|validating|auditing|scanning|dependencies|deps|bugs|issues|tasks|todos)\\s*$",
+      "description": "Standalone nouns that are vague without qualifier"
+    }
+  ],
+  "min_title_length": 1
+}
