@@ -613,6 +613,14 @@ def slugify(title, maxlen=30):
     return s or "item"
 
 
+_ID_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+
+
+def is_valid_id(s):
+    """True for the shape slugify() produces: lowercase alnum runs joined by single dashes."""
+    return bool(s) and _ID_RE.fullmatch(s) is not None
+
+
 def _unique_id(items, base):
     existing = {i.get("id") for i in items}
     if base not in existing:

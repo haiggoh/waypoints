@@ -617,6 +617,42 @@ def test_add_accepts_add_point_alias(tmp_path):
     assert _bullets(store, "alias-item") == ["a1"]
 
 
+def test_add_explicit_id_is_used_verbatim(tmp_path):
+    # Create-then-link: an id chosen up front lets cross-references be written BEFORE add.
+    store = tmp_path / "s.json"
+    r = _run([CLI, "add", "Some long title that would slug differently", "--id", "my-plan-a"], store)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "added [my-plan-a]" in r.stdout
+    assert _bullets(store, "my-plan-a") == []
+
+
+def test_add_explicit_id_rejects_non_kebab(tmp_path):
+    store = tmp_path / "s.json"
+    for bad in ("Has-Caps", "under_score", "-leading", "trailing-", "two--dashes", "sp ace", ""):
+        r = _run([CLI, "add", "Valid descriptive title here", "--id", bad], store)
+        assert r.returncode == 2, (bad, r.stdout, r.stderr)
+        assert "--id" in (r.stdout + r.stderr)
+    assert not store.exists() or json.loads(store.read_text())["items"] == []
+
+
+def test_add_explicit_id_refuses_collision_with_open_item(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "First descriptive item", "--id", "taken"], store)
+    r = _run([CLI, "add", "Second descriptive item", "--id", "taken"], store)
+    assert r.returncode == 1 and "already" in r.stdout
+    items = json.loads(store.read_text())["items"]
+    assert [i["id"] for i in items] == ["taken"]  # no silent -2 suffix
+
+
+def test_add_explicit_id_refuses_collision_with_archived_item(tmp_path):
+    # An archived id is still reserved: `reopen` would otherwise bring back a duplicate.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "First descriptive item", "--id", "taken"], store)
+    _run([CLI, "rm", "taken"], store)
+    r = _run([CLI, "add", "Second descriptive item", "--id", "taken"], store)
+    assert r.returncode == 1 and "already" in r.stdout
+
+
 def test_edit_missing_id_reports_before_touching_summary(tmp_path):
     store = _seed(tmp_path)
     r = _run([CLI, "edit", "no-such-item", "--add-point", "x"], store)

@@ -467,6 +467,10 @@ def main(argv=None):
     pa.add_argument("--detail", default="")
     pa.add_argument("--surface-on", default=None,
                     help="earliest date to surface (YYYY-MM-DD); NOT an expiry — persists until done")
+    pa.add_argument("--id", default=None, metavar="SLUG",
+                    help="use this kebab-case id instead of one slugged from the title, so "
+                         "cross-references can be written before the item exists; refused if "
+                         "any open or archived item already has it")
 
     pe = sub.add_parser("edit", help="update an existing item in place (id + created stay fixed)")
     pe.add_argument("id")
@@ -757,7 +761,20 @@ def main(argv=None):
         return 0
 
     if args.cmd == "add":
+        if args.id is not None:
+            if not c.is_valid_id(args.id):
+                print(f"--id must be kebab-case (a-z, 0-9, single dashes): {args.id!r}",
+                      file=sys.stderr)
+                return 2
+            # An archived id stays reserved: `reopen` would otherwise resurrect a duplicate,
+            # and the auto-slug path's silent -2 suffix would defeat a pre-written link.
+            taken = {i.get("id") for i in items} | \
+                    {i.get("id") for i in c.load_archive().get("items") or []}
+            if args.id in taken:
+                print(f"id already in use (open or archived): {args.id}")
+                return 1
         it = c.add_item(items, args.title, detail=args.detail, surface_on=args.surface_on,
+                        id=args.id,
                         summary=(args.point or []) + (args.add_point or []) or None)
         c.save_store(store)
         print(f"added [{it['id']}] {it['title']}")

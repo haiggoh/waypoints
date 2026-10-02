@@ -101,7 +101,11 @@ waypoints.py triage <id> --tier do-now|heavy|gated|waiting
                  [--gate-reason "…"] [--waiting-on "<id> @ <milestone>"]... | --clear
                  # --waiting-on is REPEATABLE; releases only when ALL targets land
 waypoints.py resolve                 # release waiting items whose target landed
-waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on YYYY-MM-DD]
+waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on YYYY-MM-DD] [--id slug]
+#   --id picks the id up front (kebab-case; refused if any open OR archived item has it).
+#   Linking several new items: create them ALL first, take each id from its `added [id]`
+#   line (or pre-choose with --id), THEN write --waiting-on / cross-references. A link
+#   written before the item exists guesses a slug and dangles when the guess is wrong.
 waypoints.py edit <id> [--title "…"] [--add-point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on]
 #   --add-point APPENDS a bullet, keeping the existing ones — this is what you want when recording new information.
 #   --point APPENDS a bullet, keeping the existing ones (--add-point is an alias). Only
