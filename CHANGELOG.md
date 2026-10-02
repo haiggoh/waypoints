@@ -5,6 +5,21 @@ All notable changes to `waypoints` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] — 2026-10-02
+
+### Added — `add --id <slug>`: choose the id up front
+
+- Ids are slugged from titles, so a cross-reference (`--waiting-on`, a plan's link) written before
+  `add` runs has to guess the slug — and dangles when the guess is wrong. Measured 2026-09-24: five
+  execution plans had every reference `sed`-rewritten after the fact.
+- `waypoints.py add "Title" --id my-slug` uses the id verbatim. It must be kebab-case
+  (`[a-z0-9]+(-[a-z0-9]+)*`, exit 2 otherwise) and is **refused** (exit 1) if any open **or archived**
+  item already has it — no silent `-2` suffix, which would defeat the pre-written link, and an
+  archived id stays reserved because `reopen` would otherwise resurrect a duplicate.
+- Skill: documents the create-then-link order for linking several new items.
+- Tests: 4 new (verbatim id, 7 malformed shapes, open collision, archived collision); the validator
+  and the archive half of the collision check were each mutation-tested (both caught).
+
 ## [0.11.0] — 2026-10-02
 
 ### Added — audit-loose-ends integration (`scripts/waypoint-reconcile.py`)
