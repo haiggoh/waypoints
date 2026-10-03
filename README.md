@@ -7,6 +7,9 @@ explicit store you maintain, so the banner shows exactly what you logged — no 
 
 ## Maintenance from a bare terminal
 
+`get-haiggoh apply` (0.8.0 or later) also puts `waypoints` on your own shell `PATH`, through the
+`shortcuts` file at this plugin's root.
+
 Run `waypoints` with no arguments on a terminal and it prints the dashboard, then opens an
 interactive selector over the whole command surface:
 
