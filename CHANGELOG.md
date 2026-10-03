@@ -5,6 +5,13 @@ All notable changes to `waypoints` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-10-03
+
+### Added
+- A `shortcuts` file at the plugin root declares `waypoints`, so `get-haiggoh` (0.8.0 or later)
+  can put it on your own shell `PATH` through a version-independent shim. The command itself and
+  the Bash-tool `PATH` entry Claude Code already adds are unchanged.
+
 ## [0.12.0] — 2026-10-02
 
 ### Added — `add --id <slug>`: choose the id up front
