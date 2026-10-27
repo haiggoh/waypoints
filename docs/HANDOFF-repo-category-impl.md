@@ -91,3 +91,15 @@ failing tripwire test.
 
 ## Progress
 - 2026-10-27 handoff written by the paid session (Opus 5.5). Nothing implemented yet.
+- 2026-10-27 M0 done (free session, GLM 5.3): autouse `_isolated_store` fixture in
+  `tests/conftest.py` ($WAYPOINTS_FILE + $WAYPOINTS_CLAUDE_DIR → tmp_path for EVERY test;
+  subprocess children inherit via `dict(os.environ, …)` helpers, tests that set their own
+  env still win). Tripwire `test_unprotected_test_cannot_reach_the_real_store` in
+  `tests/test_hook_and_cli.py`: asserts in-process + subprocess path RESOLUTION before any
+  write, so its own red state is side-effect-free. Mutations verified: typo'd
+  `WAYPOINT_FILE` → red at the store_path assert; `WAYPOINTS_CLAUDE_DIR` setenv removed →
+  red at the claude_dir assert; both restored → green. Suite 353 passed (`pytest -n auto`),
+  `test_version_consistency.sh` ALL PASS. Decisions recorded: (a) no real-store mtime
+  comparison in the tripwire — resolution-proof is airtight (all writes derive from
+  store_path) and an mtime check would false-red if a live session writes the real store
+  mid-test; (b) pre-existing E401 on conftest L1 left as-is (repo test style).

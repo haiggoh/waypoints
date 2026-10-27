@@ -20,6 +20,37 @@ def _run(argv, store, today=None, stdin="", env_extra=None):
                            text=True, env=env)
 
 
+# ---- the store tripwire ------------------------------------------------------------------
+# The suite's foundational guarantee: a test that forgets its env cannot reach the REAL store.
+# $WAYPOINTS_FILE fails OPEN (unset = the real path), so before the autouse fixture in
+# conftest.py an unprotected test silently wrote ~/.claude/waypoints.json for real. The fixture
+# makes the temp store the DEFAULT; this test sets NOTHING and holds the fixture to that.
+
+
+def test_unprotected_test_cannot_reach_the_real_store(tmp_path):
+    import waypoints_core as c
+    # Resolution first, writes last: with the fixture missing or broken, every assertion below
+    # fails on a path RESOLUTION before the `add` ever runs -- a tripwire that damaged the
+    # store it guards while reporting the breach would be worse than no tripwire.
+    assert c.store_path().startswith(str(tmp_path) + os.sep), \
+        "no isolation: store_path() resolves outside tmp_path -- the autouse fixture in " \
+        "conftest.py is missing or broken, and an unprotected test would write the REAL store"
+    assert c.claude_dir().startswith(str(tmp_path) + os.sep), \
+        "no isolation: claude_dir() resolves outside tmp_path"
+    # A child process must inherit the isolation: the hook and the CLI run as subprocesses,
+    # and `journal` NAMES the journal path (derived from the store path) without writing
+    # anything, so the probe is safe exactly where the protection is being tested.
+    r = subprocess.run([sys.executable, CLI, "journal"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert str(tmp_path) in r.stdout, \
+        f"a subprocess escaped isolation (journal reported {r.stdout!r})"
+    # Only now, with resolution proven isolated, perform a real write passing NO env at all.
+    r = subprocess.run([sys.executable, CLI, "add", "Store tripwire probe item"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert os.path.exists(c.store_path()), "the write did not land on the isolated store"
+
+
 def test_hook_empty_store_emits_nothing(tmp_path):
     store = tmp_path / "s.json"
     r = _run([HOOK], store, "2026-07-12")
