@@ -123,3 +123,28 @@ failing tripwire test.
   local Laguna S: hotswap failure) — retrying via local DeepSeek V4 Flash (reasoner,
   cross-family); if every free route fails, reviews must happen in the paid session before
   merge (flagged in the final summary).
+- 2026-10-27 M0+M1 review DONE (free session, GLM 5.3): remote lane failed twice (gemini 503
+  ×2, nvidia timeouts ×3) and local Laguna hotswap failed, so the review ran via local
+  DeepSeek V4 Flash (deepseek family — cross-family vs zhipu, `role_matched: true`,
+  `family_avoided: true`; task JSON /tmp/m0m1-review-local.json, result
+  /tmp/m0m1-review-local-result.json). 15 findings, every one checked against the code.
+  Disposition: F1 (tripwire "cannot distinguish fixture present/absent") — disproven by the
+  M0 mutations, which turned the test red with the fixture broken both ways. F2 (a test
+  could `delenv` its way to the real path) — real but out of the threat model (the hazard is
+  forgetting; no such test exists; a fixture cannot defend against deliberate un-setting).
+  F3 (xdist) — reviewer constructed no scenario; none exists. F4 (no real-store mtime check)
+  — the documented M0 decision (resolution proof is airtight; mtime would false-red against
+  live sessions). F5/F6/F8/F9/F11-14 — reviewer themselves marked not-defects (design
+  choices); F7 (add-`[]`-absent vs edit-`[]`-cleares "asymmetry") — the INVARIANT is
+  consistent (empty ⇒ absent on both paths); not a defect. F10/F15 — REAL: a hand-edited or
+  legacy `repos: "foo"` (string) char-split through the read path
+  (`list("foo") → ['f','o','o']`) and `list_payload` would emit a bare string against the
+  array-or-null contract. FIXED FORWARD: `_read_repos` defensive reader (legacy string
+  coerces to one repo — the normalize_waiting_on precedent; anything the tool would refuse
+  to write degrades to [] — the waiting_targets precedent); `merge_repos` reads its existing
+  side defensively and tolerates a bare-string new; `list_payload` emits `repos_of(i) or
+  None`. While fixing, a WORSE variant surfaced than the reviewer's: `normalize_repos`
+  ACCEPTED a dict (iterating it silently stored its KEYS as repos) — now only str/list/tuple
+  are accepted, everything else refused (write) / degraded (read). 6 new tests, all
+  mutation-verified (container refusal + read degrade jointly broken → 3 red, restored →
+  green). Suite 376 passed; version check ALL PASS.

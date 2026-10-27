@@ -932,6 +932,12 @@ def normalize_repos(repos):
         return []
     if isinstance(repos, str):
         repos = [repos]
+    elif not isinstance(repos, (list, tuple)):
+        # Only the documented shapes. A mapping is the dangerous one: iterating it silently
+        # yields its KEYS, so a dict passed by mistake would store nonsense as if intended.
+        # Anything else is a shape error the writer must see.
+        raise RepoError("repos must be a string or a list of strings (got %s)"
+                        % (type(repos).__name__,))
     out = []
     for r in repos:
         if not isinstance(r, str):
@@ -951,14 +957,33 @@ def normalize_repos(repos):
     return out
 
 
+def _read_repos(value):
+    """The defensive reader for what the STORE holds: shape-correct and never raising.
+
+    Values this tool writes are always clean lists, but a hand-edited or legacy store can
+    hold anything. Reads DEFEND rather than validate (the waiting-target precedent:
+    unparseable stored prose reads as no targets, it does not break every view): a bare
+    string is coerced the way it would have been WRITTEN — one repo, not its characters —
+    and anything this tool would refuse to write degrades to [].
+    """
+    try:
+        return normalize_repos(value)
+    except (RepoError, TypeError):
+        return []
+
+
 def merge_repos(existing, new):
     """Order-preserving union for `edit --repo` appends: an item never lists a repo twice.
 
     Existing order wins; new names follow in the order given. Deduping the UNION (not the
     input) is what makes append idempotent: re-running the same `edit --repo X` is a no-op
-    the journal stays silent about, rather than a growing list of repeats.
+    the journal stays silent about, rather than a growing list of repeats. `existing` goes
+    through the defensive reader (it comes from the store, which can hold legacy shapes);
+    `new` is expected pre-validated — the CLI refuses malformed input before calling.
     """
-    out = list(existing or [])
+    out = _read_repos(existing)
+    if isinstance(new, str):
+        new = [new]
     for r in new or []:
         if r not in out:
             out.append(r)
@@ -968,7 +993,7 @@ def merge_repos(existing, new):
 def repos_of(item):
     """The item's repo list as a fresh list, [] when unset — the one place the absent-vs-
     empty distinction is read, so filters and renderers cannot disagree about it."""
-    return list(item.get("repos") or [])
+    return _read_repos(item.get("repos"))
 
 
 # Vague title patterns that should be rejected
@@ -1347,7 +1372,9 @@ def list_payload(items, today_str=None):
             "waiting_on": i.get("waiting_on"),
             "pinned": is_pinned(i),
             "pin_reason": i.get("pin_reason"),
-            "repos": i.get("repos"),
+            # Through the defensive reader so the contract's "array of repo names, or null"
+            # holds even for a hand-edited store that put a bare string there.
+            "repos": repos_of(i) or None,
         })
     return {
         "contract": LIST_CONTRACT,

@@ -1702,6 +1702,48 @@ def test_list_payload_repos_key_is_present_null_when_unset():
     assert p["contract"] == 3 == c.LIST_CONTRACT
 
 
+def test_repos_of_coerces_a_legacy_string_value():
+    # A hand-edited or pre-normalization store can hold a bare string; the read path must
+    # read it the way normalize_waiting_on would WRITE it (one repo), not as characters.
+    assert c.repos_of({"repos": "free-agents"}) == ["free-agents"]
+
+
+def test_repos_of_degrades_a_value_the_store_would_refuse():
+    # Read paths DEFEND, never raise (the waiting-target precedent): an untrackable value
+    # reads as no repos rather than breaking every consumer of the field.
+    assert c.repos_of({"repos": "a/b"}) == []
+
+
+def test_repos_of_degrades_undocumented_shapes():
+    assert c.repos_of({"repos": 3}) == []
+    assert c.repos_of({"repos": {"no": "list"}}) == []
+
+
+def test_normalize_repos_refuses_undocumented_container_shapes():
+    # A mapping is the dangerous one: iterating it yields its KEYS, so without this refusal
+    # a dict passed by mistake would store its keys as if they were the repos.
+    with pytest.raises(c.RepoError):
+        c.normalize_repos({"free-agents": 1})
+    with pytest.raises(c.RepoError):
+        c.normalize_repos(3)
+
+
+def test_merge_repos_defends_a_string_existing_value():
+    # The union must go through the same defensive read, or a legacy string existing
+    # value would char-split into the item's stored list.
+    assert c.merge_repos("free-agents", ["cost-tracker"]) == ["free-agents", "cost-tracker"]
+    # ...and a bare string on the NEW side is one repo too, not characters.
+    assert c.merge_repos(["free-agents"], "cost-tracker") == ["free-agents", "cost-tracker"]
+
+
+def test_list_payload_repos_view_is_always_an_array_or_null():
+    items = [{"id": "legacy", "title": "legacy", "summary": [], "detail": "",
+              "surface_on": None, "created": "2026-10-27", "done": False, "priority": 0,
+              "repos": "free-agents"}]
+    p = c.list_payload(items, "2026-10-27")
+    assert p["items"][0]["repos"] == ["free-agents"]   # array, never a bare string
+
+
 def test_journal_records_a_repos_change(tmp_path, monkeypatch):
     # diff_items is generic on purpose, so a new field is covered for free — this pins that
     # the free coverage is real, so `edit --repo` cannot become the unrecorded mutation.
