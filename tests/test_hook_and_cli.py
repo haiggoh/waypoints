@@ -1718,3 +1718,93 @@ def test_cli_show_multi_repo_line_joins_with_plus(tmp_path):
     _run([CLI, "add", "Two repos item", "--repo", "free-agents", "--repo", "cost-tracker"], store)
     r = _run([CLI, "show", "two-repos-item"], store)
     assert "repos: free-agents + cost-tracker" in r.stdout
+
+
+# ---- M3 (0.14.0): the CLI read side of `repos` -------------------------------------------
+# list --repo X / search --repo X match when X is ANY element of the item's repos; the filter
+# must COMPOSE with the verdict views and --open, survive --json (a filtered JSON that
+# silently returns everything is the same bug as pagination losing the filter), and be
+# ECHOED by pagination. An empty result NAMES the filter that produced it — a bare
+# "(nothing to show)" would read as "no waypoints exist".
+
+
+def test_cli_list_repo_filters_to_members(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "In free-agents one", "--repo", "free-agents"], store)
+    _run([CLI, "add", "In free-agents two", "--repo", "free-agents"], store)
+    _run([CLI, "add", "Nowhere item"], store)
+    r = _run([CLI, "list", "--repo", "free-agents"], store)
+    assert "in-free-agents-one" in r.stdout and "in-free-agents-two" in r.stdout
+    assert "nowhere-item" not in r.stdout
+
+
+def test_cli_list_repo_composes_with_open_and_views(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Actionable one", "--repo", "free-agents"], store)
+    _run([CLI, "triage", "actionable-one", "--tier", "do-now"], store)
+    _run([CLI, "add", "Done one", "--repo", "free-agents"], store)
+    _run([CLI, "done", "done-one", "--no-evidence", "test setup"], store)
+    # the discriminator: a SECOND open actionable item that does NOT belong to the repo —
+    # without it this test passes even with the repo filter deleted (found by mutation check)
+    _run([CLI, "add", "Actionable outsider"], store)
+    _run([CLI, "triage", "actionable-outsider", "--tier", "do-now"], store)
+    r = _run([CLI, "list", "--repo", "free-agents", "--open"], store)
+    assert "actionable-one" in r.stdout and "done-one" not in r.stdout
+    assert "actionable-outsider" not in r.stdout
+    r = _run([CLI, "list", "--repo", "free-agents", "--actionable"], store)
+    assert "actionable-one" in r.stdout and "done-one" not in r.stdout
+    assert "actionable-outsider" not in r.stdout
+
+
+def test_cli_list_repo_matches_any_element(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Dual repo item", "--repo", "free-agents", "--repo", "cost-tracker"], store)
+    _run([CLI, "add", "Other repo item", "--repo", "run-to-completion"], store)
+    assert "dual-repo-item" in _run([CLI, "list", "--repo", "free-agents"], store).stdout
+    assert "dual-repo-item" in _run([CLI, "list", "--repo", "cost-tracker"], store).stdout
+    assert "other-repo-item" not in _run([CLI, "list", "--repo", "free-agents"], store).stdout
+
+
+def test_cli_list_repo_is_echoed_by_pagination(tmp_path):
+    # A paginated filtered view that drops the filter from its Next: command silently shows
+    # the wrong items on page 2 — the exact failure the handoff calls out.
+    store = tmp_path / "s.json"
+    for n in range(3):
+        _run([CLI, "add", f"Page item {n}", "--repo", "free-agents"], store)
+    _run([CLI, "add", "Unrelated", "--repo", "cost-tracker"], store)
+    r = _run([CLI, "list", "--repo", "free-agents", "--limit", "1"], store)
+    assert "Next: waypoints list --repo free-agents --limit 1 --page 2" in r.stdout
+
+
+def test_cli_list_repo_empty_result_names_the_filter(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Somewhere item"], store)
+    r = _run([CLI, "list", "--repo", "no-such-repo"], store)
+    assert "no-such-repo" in r.stdout
+
+
+def test_cli_list_repo_json_filters_the_payload_and_keeps_whole_counts(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Json member", "--repo", "free-agents"], store)
+    _run([CLI, "add", "Json outsider"], store)
+    payload = json.loads(_run([CLI, "list", "--repo", "free-agents", "--json"], store).stdout)
+    assert payload["repo"] == "free-agents"
+    assert [i["id"] for i in payload["items"]] == ["json-member"]
+    assert payload["counts"]["total"] == 2   # counts describe the WHOLE store, like --open
+
+
+def test_cli_search_repo_scopes_the_match(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Needle in free-agents", "--repo", "free-agents"], store)
+    _run([CLI, "add", "Needle elsewhere"], store)
+    r = _run([CLI, "search", "Needle", "--repo", "free-agents"], store)
+    assert "needle-in-free-agents" in r.stdout
+    assert "needle-elsewhere" not in r.stdout
+
+
+def test_cli_search_repo_empty_names_the_scope(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Needle elsewhere"], store)
+    r = _run([CLI, "search", "Needle", "--repo", "no-such-repo"], store)
+    assert "no item matched" in r.stdout.lower()
+    assert "no-such-repo" in r.stdout

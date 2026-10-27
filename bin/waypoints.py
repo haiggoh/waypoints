@@ -14,6 +14,7 @@ hand either: run `waypoints.py recover`.
     waypoints list --json                # documented machine-readable contract (see list_payload)
     waypoints list --gated|--waiting|--actionable|--untriaged   # symmetric views; --open drops done
     waypoints list [--limit N] [--page N] [--max-chars N] [--all]   # paging, see below
+    waypoints list --repo NAME          # only one repo's items (composes with the views/--open)
     waypoints resolve                    # release waiting items whose target has landed
     waypoints triage <id> --tier do-now|heavy|gated|waiting
                         [--gate-reason "…"] [--waiting-on "<item-id> @ <milestone>"] [--clear]
@@ -26,7 +27,7 @@ hand either: run `waypoints.py recover`.
                                          # --repo APPENDS and dedupes (re-adding is a no-op);
                                          # --clear-repo removes the category; they conflict
     waypoints show <id>                  # print title + summary + full detail (the "pick it up" view)
-    waypoints search "kw" [--all|--archived] [--case] [--regex] [--ids-only]
+    waypoints search "kw" [--all|--archived] [--case] [--regex] [--ids-only] [--repo NAME]
                                          # find items by keyword across title, bullets AND detail.
                                          # Use this instead of `list | grep`: the list view
                                          # TRUNCATES, so a grep over it silently misses matches
@@ -318,6 +319,8 @@ def _next_page_cmd(args, page):
     for flag in ("gated", "waiting", "actionable", "untriaged", "open", "verbose"):
         if getattr(args, flag, False):
             parts.append("--" + flag)
+    if getattr(args, "repo", None):
+        parts.append(f"--repo {args.repo}")
     if args.limit:
         parts.append(f"--limit {args.limit}")
     if args.max_chars != MAX_CHARS_DEFAULT:
@@ -461,6 +464,9 @@ def main(argv=None):
     pl.add_argument("--all", action="store_true",
                     help="no item and no character limit — for an ordinary terminal or a "
                          "redirection, not the inline view")
+    pl.add_argument("--repo", default=None, metavar="NAME",
+                    help="only items belonging to this repo (matches ANY element of the "
+                         "item's repos; composes with the views and --open)")
     pa = sub.add_parser("add", help="add an open item")
     pa.add_argument("title")
     pa.add_argument("--point", action="append", default=None,
@@ -520,6 +526,9 @@ def main(argv=None):
                     help="treat the query as a regular expression instead of a substring")
     pf.add_argument("--ids-only", action="store_true",
                     help="print only matching ids, one per line (for scripting)")
+    pf.add_argument("--repo", default=None, metavar="NAME",
+                    help="only items belonging to this repo (matches ANY element of the "
+                         "item's repos)")
 
     pd = sub.add_parser("done", help="mark an item done by id")
     pd.add_argument("id")
@@ -689,6 +698,10 @@ def main(argv=None):
             sel = [i for i in sel if c.is_waiting(i)]
         elif view == "untriaged":
             sel = [i for i in sel if c.is_untriaged(i)]
+        if args.repo:
+            # ANY-element membership, not whole-list equality: an umbrella item lists
+            # several repos and must surface under each of them.
+            sel = [i for i in sel if args.repo in c.repos_of(i)]
 
         if args.json:
             # Counts describe the WHOLE store (unfiltered) so a filtered view still tells the
@@ -696,10 +709,15 @@ def main(argv=None):
             # how a partial view gets mistaken for the total. The same reasoning is why --limit
             # and --max-chars are IGNORED here: silently paginated JSON is not a contract.
             payload = c.list_payload(items)
-            if view or args.open:
+            if view or args.open or args.repo:
                 keep = {i["id"] for i in sel}
                 payload["items"] = [it for it in payload["items"] if it["id"] in keep]
-                payload["view"] = view or "open"
+                payload["view"] = view or ("open" if args.open else None)
+                # The payload says WHICH filter produced the subset — a repo-filtered
+                # --json that silently returned everything would be the same defect as
+                # pagination dropping the filter, one surface over.
+                if args.repo:
+                    payload["repo"] = args.repo
             print(json.dumps(payload, indent=2, ensure_ascii=False))
             return 0
 
@@ -707,7 +725,12 @@ def main(argv=None):
             print("(no open waypoints)")
             return 0
         if not sel:
-            print(f"(no {view} waypoints)" if view else "(nothing to show)")
+            if view:
+                print(f"(no {view} waypoints)" + (f" for repo {args.repo}" if args.repo else ""))
+            elif args.repo:
+                print(f"(no waypoints for repo {args.repo})")
+            else:
+                print("(nothing to show)")
             return 0
         today = c.today()
         surf = {i["id"] for i in c.surfaceable(items, today)}
@@ -929,6 +952,8 @@ def main(argv=None):
         total = 0
         for where, pool in pools:
             for it in pool:
+                if args.repo and args.repo not in c.repos_of(it):
+                    continue
                 fields = []                      # (label, text) for every place a match can hide
                 fields.append(("title", it.get("title") or ""))
                 for b in it.get("summary") or []:
@@ -952,6 +977,8 @@ def main(argv=None):
                             print(f"    {lab}: {line}")
         if not args.ids_only:
             scope = " + ".join(w for w, _ in pools)
+            if args.repo:
+                scope += f" (repo: {args.repo})"
             if total:
                 print(f"\n{total} item(s) matched {args.query!r} in {scope}")
             else:

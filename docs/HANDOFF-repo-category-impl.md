@@ -162,3 +162,30 @@ failing tripwire test.
   merge→raw append, clear wiring, show line → 7 attributable reds; restored → green).
   During restore one `return 2` was briefly dropped from the edit except-block — caught by
   the collect-green-after-restore rule before commit; suite 384 passed, version ALL PASS.
+- 2026-10-27 M2 review DONE (local DeepSeek V4 Flash; first attempt hit `Hotswap failed:`
+  — the local inference server was wedged by a stuck 40 GB model process; the USER evicted
+  it with la-evict.sh and the re-dispatch succeeded). 29 numbered findings reduce to ~6
+  unique; every one checked against the code, ZERO actionable: title-discarded-on-refused-
+  repo is the atomic-refusal contract itself; no-op edits printing "edited" is pre-existing
+  CLI-wide behavior (the journal — the authoritative record — is correctly silent, and rc
+  still separates refusal from no-op); the stdout/stderr split matches each message's
+  nearest sibling (conflict→stdout like --clear-summary, validation-refusal→stderr like
+  pin); "no such id"→stdout/rc 1 is the every-command convention. The reviewer INDEPENDENTLY
+  CONFIRMED the safety properties: no path from a refused edit to save_store, no malformed
+  value reaching the store, correct journal silence on idempotent appends.
+- 2026-10-27 M3 done (free session, GLM 5.3): read side in `bin/waypoints.py` —
+  `list --repo NAME` (ANY-element membership; composes with the verdict views and --open;
+  applies to `--json`, which now filters its items AND records `payload["repo"]` while
+  counts stay whole-store, and sets `payload["view"]` to None rather than a lying "open"
+  when only the repo filter is active), pagination echoes `--repo` in `_next_page_cmd`,
+  `search --repo NAME` (per-pool filter + the empty-result footer names the repo scope),
+  empty `list --repo` results NAME the filter (scope honesty). Two process catches worth
+  recording: (1) Pyright caught a real nesting bug from a mid-indent Edit substring match
+  (the `if args.repo:` scope-suffix landed as a sibling of `if not args.ids_only:` and
+  swallowed the search footer — the old search tests caught it in the full suite; lesson:
+  Edit anchors need surrounding-context lines, and the full-suite run after every edit is
+  the backstop); (2) the M3 mutation check exposed two VACUOUS tests (composes/any-element
+  fixtures had no item the filter would exclude) — both strengthened with discriminator
+  items, re-verified red under the mutations. Mutations verified: list filter, json filter,
+  pagination echo, search filter, scope suffix — all 5 jointly broken → 8 red; restored →
+  green. Suite 392 passed; version check ALL PASS.
