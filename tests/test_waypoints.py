@@ -1577,3 +1577,144 @@ def test_list_payload_carries_the_pin_and_counts_it():
     assert p["items"][0]["pinned"] is True
     assert p["items"][0]["pin_reason"] == "today"
     assert p["counts"]["pinned"] == 1
+
+
+# ---- v0.14.0: repos — the repo/project category (design B) ----
+#
+# The field: optional `repos`, a LIST of repo directory names (the ~/ClaudeWorkspace/<repo>
+# dir name), absent by default, never defaulted, no migration — the optional-field idiom.
+# A single string normalizes to a one-element list exactly like normalize_waiting_on, so
+# exactly one shape lives on disk. Malformed input is REFUSED at write, never repaired
+# silently, and an item never lists a repo twice (append dedupes).
+
+
+def test_normalize_repos_single_string_becomes_a_one_element_list():
+    assert c.normalize_repos("free-agents") == ["free-agents"]
+
+
+def test_normalize_repos_none_and_empty_string_are_the_unset_case():
+    assert c.normalize_repos(None) == []
+    assert c.normalize_repos("") == []
+
+
+def test_normalize_repos_passes_a_clean_list_through():
+    assert c.normalize_repos(["free-agents", "cost-tracker"]) == ["free-agents", "cost-tracker"]
+
+
+def test_normalize_repos_refuses_a_path_rather_than_a_name():
+    # A "/" means someone typed a path; the value is a directory NAME. Which side of the
+    # slash is the repo is not something the store should guess.
+    with pytest.raises(c.RepoError):
+        c.normalize_repos(["free-agents/sub"])
+
+
+def test_normalize_repos_refuses_empty_and_whitespace_values():
+    with pytest.raises(c.RepoError):
+        c.normalize_repos([""])
+    with pytest.raises(c.RepoError):
+        c.normalize_repos(["   "])
+
+
+def test_normalize_repos_refuses_surrounding_whitespace_instead_of_stripping():
+    # Stripping would be silent repair: the writer typed something the store did not store.
+    with pytest.raises(c.RepoError):
+        c.normalize_repos([" free-agents"])
+
+
+def test_normalize_repos_refuses_duplicates_in_one_write():
+    with pytest.raises(c.RepoError):
+        c.normalize_repos(["free-agents", "free-agents"])
+
+
+def test_normalize_repos_refuses_a_non_string():
+    with pytest.raises(c.RepoError):
+        c.normalize_repos(["free-agents", 3])
+
+
+def test_add_item_stores_repos_and_accepts_a_single_string():
+    items = []
+    it = c.add_item(items, "sweep free-agents changelog", repos=["free-agents"])
+    assert it["repos"] == ["free-agents"]
+    it = c.add_item(items, "single string form", repos="cost-tracker")
+    assert it["repos"] == ["cost-tracker"]
+
+
+def test_add_item_without_repos_leaves_no_key():
+    # Absent, not null: an item nobody categorised is byte-identical to a pre-0.14.0 item.
+    items = []
+    it = c.add_item(items, "no repo")
+    assert "repos" not in it
+
+
+def test_add_item_repos_refusal_leaves_the_store_untouched():
+    items = []
+    with pytest.raises(c.RepoError):
+        c.add_item(items, "bad repo", repos=["free-agents/sub"])
+    assert items == []  # refused BEFORE the append, not cleaned up after it
+
+
+def test_edit_item_sets_and_clears_repos():
+    items = []
+    c.add_item(items, "categorise me")
+    it = c.edit_item(items, items[-1]["id"], repos=["free-agents"])
+    assert it["repos"] == ["free-agents"]
+    it = c.edit_item(items, items[-1]["id"], repos=None)   # the clear
+    assert "repos" not in it
+    c.edit_item(items, items[-1]["id"], repos=["free-agents"])
+    it = c.edit_item(items, items[-1]["id"], repos=[])     # empty list clears too
+    assert "repos" not in it
+
+
+def test_edit_item_leaves_repos_alone_when_not_passed():
+    items = []
+    c.add_item(items, "keep", repos=["free-agents"])
+    c.edit_item(items, items[-1]["id"], title="retitled")
+    assert items[-1]["repos"] == ["free-agents"]
+
+
+def test_edit_item_revalidates_what_it_stores():
+    # The choke-point rule: every write path validates. A caller that hand-built a
+    # duplicate list must be refused by edit_item itself, not by the CLI alone.
+    items = []
+    c.add_item(items, "x", repos=["free-agents"])
+    with pytest.raises(c.RepoError):
+        c.edit_item(items, items[-1]["id"], repos=["free-agents", "free-agents"])
+
+
+def test_merge_repos_appends_without_duplicating_and_keeps_order():
+    assert c.merge_repos(["free-agents"], ["free-agents", "cost-tracker"]) == \
+        ["free-agents", "cost-tracker"]
+    assert c.merge_repos(None, ["x"]) == ["x"]
+    assert c.merge_repos(["a"], []) == ["a"]
+    assert c.merge_repos([], ["b", "a"]) == ["b", "a"]
+
+
+def test_list_payload_repos_key_is_present_null_when_unset():
+    items = []
+    c.add_item(items, "no repo")
+    c.add_item(items, "one repo", repos=["free-agents"])
+    p = c.list_payload(items, "2026-09-04")
+    assert p["items"][0]["repos"] is None          # always PRESENT in the view, null when unset
+    assert p["items"][1]["repos"] == ["free-agents"]
+    # Additive only: the sum invariant is unchanged, so the contract does NOT bump (the
+    # policy list_payload documents). Pin it — a bump for a purely additive field is the
+    # specific mistake the policy exists to prevent.
+    assert p["contract"] == 3 == c.LIST_CONTRACT
+
+
+def test_journal_records_a_repos_change(tmp_path, monkeypatch):
+    # diff_items is generic on purpose, so a new field is covered for free — this pins that
+    # the free coverage is real, so `edit --repo` cannot become the unrecorded mutation.
+    store = tmp_path / "s.json"
+    monkeypatch.setenv("WAYPOINTS_FILE", str(store))
+    items = []
+    c.add_item(items, "sweep the changelogs")
+    c.save_store({"version": c.VERSION, "items": items}, argv=["setup"])
+    c.edit_item(items, items[-1]["id"], repos=["free-agents"])
+    c.save_store({"version": c.VERSION, "items": items},
+                 argv=["edit", items[-1]["id"], "--repo", "free-agents"])
+    entries = [e for e in c.read_journal() if e["argv"][:1] == ["edit"]]
+    assert len(entries) == 1
+    ch = entries[0]["changes"]
+    assert ch[0]["before"].get("repos") is None
+    assert ch[0]["after"]["repos"] == ["free-agents"]

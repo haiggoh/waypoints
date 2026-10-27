@@ -103,3 +103,23 @@ failing tripwire test.
   comparison in the tripwire — resolution-proof is airtight (all writes derive from
   store_path) and an mtime check would false-red if a live session writes the real store
   mid-test; (b) pre-existing E401 on conftest L1 left as-is (repo test style).
+- 2026-10-27 M1 done (free session, GLM 5.3): core repo machinery in `waypoints_core.py` —
+  `RepoError(ValueError)`, `normalize_repos` (single string → one-element list like
+  `normalize_waiting_on`; REFUSES empty/blank, surrounding whitespace, `/`-paths, non-strings,
+  duplicates within one write — never silently repaired), `merge_repos` (order-preserving
+  union = the "dedupe within an item" append semantics: input duplicates refused, union
+  deduped so `edit --repo X` is idempotent and a no-op append earns no journal entry),
+  `repos_of` accessor; `add_item(repos=…)`, `edit_item(repos=…)` (_UNSET = leave, empty =
+  clear back to ABSENT per the set_verdict idiom); `list_payload` carries `repos`
+  (null-when-unset view key), LIST_CONTRACT stays 3 (additive — pinned by a test).
+  17 tests in `tests/test_waypoints.py` incl. journal-diff-covers-repos proof. Mutations
+  verified (9 guard tests went red, breaks applied jointly): all per-value refusals,
+  edit-clear, merge-dedupe, plus `revalidates` (note: `-k repos` DESELECTS that test —
+  "revalidates" lacks the substring; run it by full name). Suite 370 passed. Decision
+  recorded: handoff bullet 2 read as "duplicates IN ONE WRITE refused; duplicates vs the
+  item's existing list deduped" — both sentences get distinct referents, matches the
+  --point append precedent, and makes the Phase-2 backfill idempotent. Reviews: M0/M1
+  independent dispatch BLOCKED so far (remote free lane: gemini 503 ×2, nvidia timeouts ×3;
+  local Laguna S: hotswap failure) — retrying via local DeepSeek V4 Flash (reasoner,
+  cross-family); if every free route fails, reviews must happen in the paid session before
+  merge (flagged in the final summary).

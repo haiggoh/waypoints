@@ -900,6 +900,77 @@ def stale_waiting(items, archived=()):
     return out
 
 
+# --- Optional repo category (0.14.0) ------------------------------------------------------
+# `repos` names the repos/projects an item belongs to: a LIST of bare directory names — the
+# name of the repo's checkout directory, exactly as you would `cd` into it from your own
+# workspace root (e.g. "free-agents"). A directory NAME, not a path — the sweep that reads a
+# repo's changelog composes the path itself, and half a path would be unguessable.
+#
+# Absent by default, never defaulted, no migration (the optional-field idiom above). One
+# shape on disk — a list — because multi-repo items are a real case (an umbrella fix touches
+# two repos), exactly the reasoning that made waiting_on a list. A single string is accepted
+# at write and stored as a one-element list, mirroring normalize_waiting_on.
+#
+# Refused, never repaired: the value is the join key for `--repo` filters and the changelog
+# sweep, so a typo'd or path-shaped entry would not merely render oddly — it would silently
+# place the item outside every filter and outside the sweep, reading as "no work happened".
+# A refusal makes the writer see the mistake at the only moment it is cheap to fix.
+
+class RepoError(ValueError):
+    """A malformed repo value: empty/blank, a path rather than a directory name, a non-string,
+    or a duplicate within one write."""
+
+
+def normalize_repos(repos):
+    """Coerce `repos` to a LIST of repo names, REFUSING anything malformed.
+
+    None and "" are the unset case ([]), so a caller can clear through the same argument.
+    Duplicates are refused per write; the union with what an item already holds is
+    merge_repos's job, so an append stays idempotent without ever storing a repeated name.
+    """
+    if repos is None or repos == "":
+        return []
+    if isinstance(repos, str):
+        repos = [repos]
+    out = []
+    for r in repos:
+        if not isinstance(r, str):
+            raise RepoError("a repo must be a string (got %r)" % (r,))
+        if not r.strip():
+            raise RepoError("a repo name cannot be empty or blank (got %r)" % (r,))
+        if r != r.strip():
+            raise RepoError("a repo name cannot carry surrounding whitespace (got %r) — "
+                            "refused rather than stripped, so the store never quietly holds "
+                            "something other than what was typed" % (r,))
+        if "/" in r:
+            raise RepoError("a repo is a directory NAME, not a path (got %r) — the sweep "
+                            "composes the path itself" % (r,))
+        if r in out:
+            raise RepoError("duplicate repo in one write: %r (pass it once)" % (r,))
+        out.append(r)
+    return out
+
+
+def merge_repos(existing, new):
+    """Order-preserving union for `edit --repo` appends: an item never lists a repo twice.
+
+    Existing order wins; new names follow in the order given. Deduping the UNION (not the
+    input) is what makes append idempotent: re-running the same `edit --repo X` is a no-op
+    the journal stays silent about, rather than a growing list of repeats.
+    """
+    out = list(existing or [])
+    for r in new or []:
+        if r not in out:
+            out.append(r)
+    return out
+
+
+def repos_of(item):
+    """The item's repo list as a fresh list, [] when unset — the one place the absent-vs-
+    empty distinction is read, so filters and renderers cannot disagree about it."""
+    return list(item.get("repos") or [])
+
+
 # Vague title patterns that should be rejected
 # These patterns match when the object is vague (it, this, that, something, things, stuff, etc.)
 # NOT when there's a specific identifier (like "Do X", "Fix login", "Add user")
@@ -990,9 +1061,10 @@ def validate_title_or_raise(title: str):
 
 
 def add_item(items, title, detail="", surface_on=None, created=None, id=None, summary=None,
-             tier=None, gate_reason=None, waiting_on=None):
+             tier=None, gate_reason=None, waiting_on=None, repos=None):
     validate_verdict(tier, gate_reason, waiting_on)
     validate_title_or_raise(title)
+    repos_list = normalize_repos(repos)
     item = {
         "id": id or _unique_id(items, slugify(title)),
         "title": title,
@@ -1009,6 +1081,8 @@ def add_item(items, title, detail="", surface_on=None, created=None, id=None, su
         item["gate_reason"] = gate_reason
     if waiting_on:
         item["waiting_on"] = normalize_waiting_on(waiting_on)
+    if repos_list:
+        item["repos"] = repos_list
     items.append(item)
     return item
 
@@ -1021,11 +1095,14 @@ def get_item(items, item_id):
     return None
 
 
-def edit_item(items, item_id, title=_UNSET, summary=_UNSET, detail=_UNSET, surface_on=_UNSET):
+def edit_item(items, item_id, title=_UNSET, summary=_UNSET, detail=_UNSET, surface_on=_UNSET,
+              repos=_UNSET):
     """Update an existing item in place; only fields explicitly passed change. `id` and `created`
     are intentionally immutable — a stable id is the whole reason this exists (the old
     done+re-add workaround regenerated the id and lost the created date). Returns the item, or
-    None if no such id. Pass surface_on=None to CLEAR a date (vs the _UNSET default = leave it)."""
+    None if no such id. Pass surface_on=None to CLEAR a date (vs the _UNSET default = leave it).
+    Repos: not passed = leave as-is; a list/string SETS it (validated); an empty value CLEARS
+    it back to absent — the same _UNSET-vs-None split surface_on uses, for the same reason."""
     it = get_item(items, item_id)
     if it is None:
         return None
@@ -1037,6 +1114,12 @@ def edit_item(items, item_id, title=_UNSET, summary=_UNSET, detail=_UNSET, surfa
         it["detail"] = detail
     if surface_on is not _UNSET:
         it["surface_on"] = surface_on
+    if repos is not _UNSET:
+        repos_list = normalize_repos(repos)
+        if repos_list:
+            it["repos"] = repos_list
+        else:
+            it.pop("repos", None)
     return it
 
 
@@ -1219,7 +1302,8 @@ def list_payload(items, today_str=None):
                            id, title, summary[], detail, created, surface_on, done, priority,
                            surfaceable (bool, computed), tier (str|null), gate_reason (str|null),
                            waiting_on (array of "<id> @ <milestone>" strings, or null),
-                           pinned (bool), pin_reason (str|null)
+                           pinned (bool), pin_reason (str|null),
+                           repos (array of repo names, or null)
 
     `tier`/`gate_reason`/`waiting_on` are always PRESENT here and null when unset — a consumer
     reading a view should not have to distinguish a missing key from a null one. In the STORE
@@ -1238,6 +1322,9 @@ def list_payload(items, today_str=None):
     pinned item is still counted in exactly one of the four. The bump is here because the
     field carries an ORDERING rule a consumer must honour to be correct — a pinned item runs
     before the do-now pile despite its tier — and a consumer cannot discover that by shape.
+
+    `repos` (0.14.0) rides contract 3 UNCHANGED: purely additive — no sum invariant changed,
+    no ordering rule — so per the policy above it does not bump the contract.
     """
     today_str = today_str or today()
     surf = {i["id"] for i in surfaceable(items, today_str)}
@@ -1260,6 +1347,7 @@ def list_payload(items, today_str=None):
             "waiting_on": i.get("waiting_on"),
             "pinned": is_pinned(i),
             "pin_reason": i.get("pin_reason"),
+            "repos": i.get("repos"),
         })
     return {
         "contract": LIST_CONTRACT,
