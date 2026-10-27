@@ -148,3 +148,17 @@ failing tripwire test.
   are accepted, everything else refused (write) / degraded (read). 6 new tests, all
   mutation-verified (container refusal + read degrade jointly broken → 3 red, restored →
   green). Suite 376 passed; version check ALL PASS.
+- 2026-10-27 M2 done (free session, GLM 5.3): CLI write side in `bin/waypoints.py` —
+  `add --repo NAME` (repeatable, order-preserving), `edit <id> --repo NAME` (append via
+  `merge_repos`, so re-adding is a no-op and the journal stays silent on it),
+  `edit <id> --clear-repo` (conflicts with `--repo`, exit 2, mirroring --clear-summary's
+  refusal pattern), `show` prints `repos: a + b` (through `repos_of`, so legacy values
+  cannot char-split in the display). Refusals are CAUGHT in both add and edit branches and
+  print `refused: …` + exit 2 — never a traceback; a refused edit returns BEFORE
+  `save_store`, so nothing is written. Module docstring usage lines updated. 8 CLI tests in
+  `tests/test_hook_and_cli.py`; test-design rule: refusal tests assert on the MESSAGE and
+  store state, never rc alone (argparse's unknown-flag error also exits 2). Mutations
+  verified jointly (6 guards broken at once: add-catch, edit-catch, conflict check,
+  merge→raw append, clear wiring, show line → 7 attributable reds; restored → green).
+  During restore one `return 2` was briefly dropped from the edit except-block — caught by
+  the collect-green-after-restore rule before commit; suite 384 passed, version ALL PASS.

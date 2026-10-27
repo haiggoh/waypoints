@@ -18,9 +18,13 @@ hand either: run `waypoints.py recover`.
     waypoints triage <id> --tier do-now|heavy|gated|waiting
                         [--gate-reason "…"] [--waiting-on "<item-id> @ <milestone>"] [--clear]
     waypoints add "Title" [--point "…" ...] [--detail ...] [--surface-on YYYY-MM-DD]
+                        [--repo NAME ...]        # repo(s) this item belongs to (repeatable)
     waypoints edit <id> [--title …] [--add-point "…" ...] [--clear-summary] [--detail …]
                                          # --point/--add-point both APPEND; --replace-points discards
                         [--surface-on YYYY-MM-DD] [--clear-surface-on]
+                        [--repo NAME ...] [--clear-repo]
+                                         # --repo APPENDS and dedupes (re-adding is a no-op);
+                                         # --clear-repo removes the category; they conflict
     waypoints show <id>                  # print title + summary + full detail (the "pick it up" view)
     waypoints search "kw" [--all|--archived] [--case] [--regex] [--ids-only]
                                          # find items by keyword across title, bullets AND detail.
@@ -471,6 +475,9 @@ def main(argv=None):
                     help="use this kebab-case id instead of one slugged from the title, so "
                          "cross-references can be written before the item exists; refused if "
                          "any open or archived item already has it")
+    pa.add_argument("--repo", action="append", default=None, metavar="NAME",
+                    help="repo this item belongs to: the bare directory name of its checkout "
+                         "(repeatable). Malformed values are REFUSED, not repaired")
 
     pe = sub.add_parser("edit", help="update an existing item in place (id + created stay fixed)")
     pe.add_argument("id")
@@ -492,6 +499,12 @@ def main(argv=None):
     pe.add_argument("--detail", default=None, help="new detail; pass \"\" to clear it")
     pe.add_argument("--surface-on", default=None, help="set the earliest-surface date (YYYY-MM-DD)")
     pe.add_argument("--clear-surface-on", action="store_true", help="remove the surface-on date")
+    pe.add_argument("--repo", action="append", default=None, metavar="NAME",
+                    help="append a repo this item belongs to (repeatable). Deduped: re-adding "
+                         "a repo the item already has is a no-op. Malformed values are "
+                         "REFUSED, not repaired")
+    pe.add_argument("--clear-repo", action="store_true",
+                    help="remove the repo category entirely (cannot be combined with --repo)")
 
     ps = sub.add_parser("show", help="print an item's full detail (the pick-it-up view)")
     ps.add_argument("id")
@@ -773,9 +786,14 @@ def main(argv=None):
             if args.id in taken:
                 print(f"id already in use (open or archived): {args.id}")
                 return 1
-        it = c.add_item(items, args.title, detail=args.detail, surface_on=args.surface_on,
-                        id=args.id,
-                        summary=(args.point or []) + (args.add_point or []) or None)
+        try:
+            it = c.add_item(items, args.title, detail=args.detail, surface_on=args.surface_on,
+                            id=args.id,
+                            summary=(args.point or []) + (args.add_point or []) or None,
+                            repos=args.repo)
+        except c.RepoError as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 2
         c.save_store(store)
         print(f"added [{it['id']}] {it['title']}")
         return 0
@@ -858,6 +876,20 @@ def main(argv=None):
             kwargs["surface_on"] = None
         elif args.surface_on is not None:
             kwargs["surface_on"] = args.surface_on
+        if args.clear_repo and args.repo:
+            print("--clear-repo cannot be combined with --repo")
+            return 2
+        if args.clear_repo:
+            kwargs["repos"] = None
+        elif args.repo:
+            try:
+                new_repos = c.normalize_repos(args.repo)
+            except c.RepoError as e:
+                print(f"refused: {e}", file=sys.stderr)
+                return 2
+            # Append like --point, but as a set: the item never lists a repo twice, so the
+            # backfill sweep can safely re-run `edit --repo X`.
+            kwargs["repos"] = c.merge_repos(existing.get("repos"), new_repos)
         it = c.edit_item(items, args.id, **kwargs)
         if it is None:
             print(f"no such id: {args.id}")
@@ -944,6 +976,9 @@ def main(argv=None):
             if it.get("gate_reason"):
                 line += f" — waiting on: {it['gate_reason']}"
             print(f"  {line}")
+        # Through repos_of so a hand-edited legacy value cannot char-split in the display.
+        if c.repos_of(it):
+            print(f"  repos: {' + '.join(c.repos_of(it))}")
         meta = f"created: {it.get('created')}   done: {it.get('done')}"
         if it.get("surface_on"):
             meta += f"   surface_on: {it['surface_on']}"

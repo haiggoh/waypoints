@@ -1639,3 +1639,82 @@ def test_search_never_writes_to_the_store(tmp_path):
     _run([CLI, "search", "Something"], store)
     _run([CLI, "search", "nothing-here"], store)
     assert store.read_bytes() == before
+
+
+# ---- M2 (0.14.0): the CLI write side of `repos` -------------------------------------------
+# add --repo (repeatable) / edit --repo (append, deduped) / edit --clear-repo / show line.
+# Refusals assert on the MESSAGE and the store's state, never on the exit code alone:
+# argparse's unknown-flag error ALSO exits 2, so a rc-only assertion would read green in
+# exactly the state (flag not implemented) it exists to catch.
+
+
+def test_cli_add_repo_roundtrips_and_shows(tmp_path):
+    store = tmp_path / "s.json"
+    r = _run([CLI, "add", "Sweep the changelogs", "--repo", "free-agents"], store, "2026-10-27")
+    assert r.returncode == 0, r.stderr
+    with open(store) as f:
+        items = json.load(f)["items"]
+    assert items[0]["repos"] == ["free-agents"]
+    r = _run([CLI, "show", items[0]["id"]], store)
+    assert "repos: free-agents" in r.stdout
+
+
+def test_cli_add_repo_is_repeatable_and_order_preserved(tmp_path):
+    store = tmp_path / "s.json"
+    r = _run([CLI, "add", "Two repos", "--repo", "cost-tracker", "--repo", "free-agents"], store)
+    assert r.returncode == 0, r.stderr
+    with open(store) as f:
+        assert json.load(f)["items"][0]["repos"] == ["cost-tracker", "free-agents"]
+
+
+def test_cli_add_bad_repo_is_refused_and_writes_nothing(tmp_path):
+    store = tmp_path / "s.json"
+    r = _run([CLI, "add", "Bad repo", "--repo", "free-agents/sub"], store)
+    assert r.returncode == 2                      # the CLI refusal, never a traceback
+    assert "refused" in (r.stdout + r.stderr).lower()
+    assert "Traceback" not in r.stderr
+    assert not store.exists()                     # nothing was written
+
+
+def test_cli_edit_repo_appends_and_dedupes(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Categorise me"], store)
+    assert _run([CLI, "edit", "categorise-me", "--repo", "free-agents"], store).returncode == 0
+    assert _run([CLI, "edit", "categorise-me", "--repo", "free-agents"], store).returncode == 0
+    assert _run([CLI, "edit", "categorise-me", "--repo", "cost-tracker"], store).returncode == 0
+    with open(store) as f:
+        assert json.load(f)["items"][0]["repos"] == ["free-agents", "cost-tracker"]
+
+
+def test_cli_edit_repo_bad_value_refused_without_saving(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Keep me", "--repo", "free-agents"], store)
+    r = _run([CLI, "edit", "keep-me", "--repo", "a/b"], store)
+    assert r.returncode == 2
+    assert "refused" in (r.stdout + r.stderr).lower()
+    with open(store) as f:
+        assert json.load(f)["items"][0]["repos"] == ["free-agents"]   # unchanged
+
+
+def test_cli_edit_clear_repo_removes_the_field(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Clear me", "--repo", "free-agents"], store)
+    r = _run([CLI, "edit", "clear-me", "--clear-repo"], store)
+    assert r.returncode == 0, r.stderr
+    with open(store) as f:
+        assert "repos" not in json.load(f)["items"][0]   # ABSENT, not []
+
+
+def test_cli_edit_clear_repo_conflicts_with_repo(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Conflict"], store)
+    r = _run([CLI, "edit", "conflict", "--repo", "x", "--clear-repo"], store)
+    assert r.returncode == 2
+    assert "--clear-repo cannot be combined" in (r.stdout + r.stderr)
+
+
+def test_cli_show_multi_repo_line_joins_with_plus(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Two repos item", "--repo", "free-agents", "--repo", "cost-tracker"], store)
+    r = _run([CLI, "show", "two-repos-item"], store)
+    assert "repos: free-agents + cost-tracker" in r.stdout
