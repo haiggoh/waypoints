@@ -214,3 +214,29 @@ failing tripwire test.
   red; unquoted echo; dropped open-word → both fix tests red. Suite 399 passed; version
   check ALL PASS. Design note: the span is computed over `shown` (post-BANNER_MAX_ITEMS
   cap) — "the LISTED items" per the handoff; unlisted tail items do not trigger tagging.
+- 2026-10-28 M4 review DONE (local DeepSeek V4 Flash, cross-family): 6 findings, ZERO
+  actionable, each dispositioned against the code: tag-wrapping to its own line for
+  ~55-72-char titles (cosmetic; the specified budget is BANNER_TITLE_MAX per the handoff —
+  the alternatives either trim against BANNER_WIDTH, contradicting the decided budget, or
+  glue the tag with a non-breaking space, creating a ~96-char unbreakable token that the
+  renderer re-wraps mid-token — the documented worse failure; attribution stays possible
+  because adjacent lines carry unmistakable `←` / `(since` prefixes); degenerate budget with
+  an ~86+-char repo name (pathological input, render still names the repo; a write-side
+  length cap is a policy the handoff did not decide); tags flipping with gated collapse (that
+  IS the design — "the LISTED items"); `[first+N]` ambiguity with `+`/`]` in names
+  (display-only, data lives in the store); byte-identity "fragility" (what the pins exist to
+  guard) and the pre-existing `_short_title` ellipsis off-by-one.
+- 2026-10-28 M5 done (free session, GLM 5.3): CHANGELOG [0.14.0] entry; README (command
+  examples, new "Repo category" section, banner-tag note, stale list --json example refreshed
+  to contract 3 with repos); skills/waypoints/SKILL.md (optional-fields paragraph, contract
+  example + history note, command block, "Tag the repo when there is one" guidance — one
+  hardcode-path finding fixed, the SKILL-BUDGET breach noted as pre-existing); version bumped
+  in the only surface that carries it (.claude-plugin/plugin.json 0.13.0 → 0.14.0; the
+  handoff docs' "v0.13.0" mentions are historical statements about the BASE and stay).
+  Version-consistency gate: ALL PASS (manifest == CHANGELOG top, 7 bullets, README contract 3).
+  LIVE DOGFOOD against a temp store through the real CLI AND hook: filtering, idempotent
+  append, clean refusals (rc 2), scoped search footer, show line, --json payload naming the
+  filter with whole-store counts, both-filters empty message, and the banner tags rendering
+  ([free-agents+1] umbrella, [free-agents] single) — every documented claim matched. Suite
+  399 passed. Branch pushed to origin/feat/repo-category. STOPPED here per the handoff:
+  no merge, no tag, no release.

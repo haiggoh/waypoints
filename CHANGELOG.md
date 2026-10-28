@@ -5,6 +5,41 @@ All notable changes to `waypoints` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] — 2026-10-28
+
+### Added — `repos`: a repo/project category per item, and `--repo` filters for it
+
+- Items may carry `repos`, a LIST of bare repo directory names: `add --repo NAME` (repeatable),
+  `edit <id> --repo NAME` (APPENDS and dedupes — re-adding is a safe no-op, the property a
+  backfill sweep needs), `edit <id> --clear-repo` to remove it. Absent by default, never
+  defaulted, no migration: an item nobody categorises is byte-identical to a pre-0.14.0 item.
+- Malformed values are REFUSED at write, never repaired — empty/blank names, surrounding
+  whitespace (refused rather than stripped), `/`-paths (the value is a directory NAME, not a
+  path), non-strings, duplicates within one write — because the value is the join key for the
+  `--repo` filters and the changelog sweep, and a typo'd entry would silently place an item
+  outside every filter, reading as "no work happened". The READ side defends instead of raising
+  (the waiting-target precedent): a hand-edited legacy string coerces to one repo, anything
+  unwritable degrades to `[]`, so one malformed field cannot break every view.
+- `list --repo NAME` matches when NAME is ANY element (an umbrella item surfaces under each repo
+  it names), composes with the verdict views and `--open`, survives `--json` (the payload gains a
+  `repo` key naming the filter and narrows `items`; `view` stays null rather than claiming
+  "open"; counts still describe the whole store), and is ECHOED by pagination — a quoted,
+  re-runnable `--repo` value in the printed next-page command. `search --repo NAME` scopes every
+  pool. Both NAME the filter in their empty-result output, so an empty result cannot read as
+  "no waypoints exist".
+- The banner gains a conditional tag: COMPACT mode only, and only when the LISTED items span
+  2+ distinct repos, each repos-carrying title gets ` [repo]` (multi-repo: ` [first+N]`). The tag
+  counts against `BANNER_TITLE_MAX` — the title is trimmed, never the tag. Every other banner
+  renders BYTE-IDENTICAL to 0.13.0, pinned by tests that render repos-carrying items against
+  their repos-stripped twins and demand exact equality.
+- No LIST_CONTRACT bump: `repos` in `list --json` is purely additive (null when unset), per the
+  bump policy the contract's own docstring states.
+- Also in this release: the test suite's store tripwire — an autouse fixture points
+  `$WAYPOINTS_FILE`/`$WAYPOINTS_CLAUDE_DIR` at tmp_path for EVERY test, so a test that forgets
+  its env can no longer reach the live store (the fail-open hazard `test_menu.py` documented).
+- Tests: 47 new across core, CLI and banner; every new guard mutation-verified (break → red →
+  restore → green), including two vacuous tests the mutation pass itself caught and strengthened.
+
 ## [0.13.0] — 2026-10-03
 
 ### Added

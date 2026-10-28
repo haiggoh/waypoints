@@ -52,26 +52,34 @@ written before verdicts existed needs migrating, and `untriaged` stays a real th
 than a silent synonym for "actionable". An item nobody has assessed is not thereby known to be
 unblocked.
 
+**Optional repo category.** An item may also carry `repos` — a LIST of bare repo directory
+names, **absent unless set** (`add --repo NAME`, repeatable; `edit <id> --repo NAME` APPENDS and
+dedupes; `--clear-repo` removes). `list --repo NAME` / `search --repo NAME` filter to one repo's
+items and compose with the views. The value is a directory NAME, not a path — a `/` is refused
+at write, as are blank names, surrounding whitespace and duplicates.
+
 ## Reading the queue programmatically
 
 `waypoints.py list --json` emits a **documented contract** — use it instead of parsing the store
 file, which is free to change shape:
 
 ```json
-{ "contract": 1, "generated": "YYYY-MM-DD",
+{ "contract": 3, "generated": "YYYY-MM-DD",
   "counts": { "total": 0, "open": 0, "done": 0, "surfaceable": 0,
-              "gated": 0, "waiting": 0, "actionable": 0, "untriaged": 0 },
+              "gated": 0, "waiting": 0, "actionable": 0, "untriaged": 0, "pinned": 0 },
   "items": [ { "id": "…", "title": "…", "summary": [], "detail": "…",
                "created": "YYYY-MM-DD", "surface_on": null, "done": false, "priority": 0,
-               "surfaceable": true, "tier": null, "gate_reason": null } ] }
+               "surfaceable": true, "tier": null, "gate_reason": null,
+               "waiting_on": null, "pinned": false, "pin_reason": null, "repos": null } ] }
 ```
 
 - `contract` versions the **output**, independently of the store's `version`.
-- `tier`/`gate_reason` are always present here and `null` when unset — a consumer never has to tell
-  a missing key from a null one, even though the store itself omits them.
+- `tier`/`gate_reason`/`repos` are always present here and `null` when unset — a consumer never has
+  to tell a missing key from a null one, even though the store itself omits them.
 - `gated + waiting + actionable + untriaged == open`, so you can verify nothing was dropped.
   (Contract **2** added `waiting` and `waiting_on`; the version moved because this very sum
-  changed, so a consumer auditing the old three-way sum would fail its own audit.)
+  changed, so a consumer auditing the old three-way sum would fail its own audit. Contract **3**
+  added `pinned`/`pin_reason`; `repos` rides 3 **unchanged** — purely additive, no invariant moved.)
 - A filtered view adds `"view"` and narrows `items`, but `counts` still describe the **whole**
   store — a subset should never be mistakable for the total.
 
@@ -97,27 +105,29 @@ waypoints                            # bare = dashboard; `waypoints` is on PATH 
 waypoints.py list                    # ONE LINE per item, grouped; --verbose restores the rest
 waypoints.py list --gated|--waiting|--actionable|--untriaged [--open]   # symmetric views
 waypoints.py list [--limit N] [--page N] [--max-chars N] [--all]        # bounded output
+waypoints.py list --repo NAME [--open] # one repo's items; composes with the views above
 waypoints.py triage <id> --tier do-now|heavy|gated|waiting
                  [--gate-reason "…"] [--waiting-on "<id> @ <milestone>"]... | --clear
                  # --waiting-on is REPEATABLE; releases only when ALL targets land
 waypoints.py resolve                 # release waiting items whose target landed
-waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on YYYY-MM-DD] [--id slug]
+waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on YYYY-MM-DD] [--id slug] [--repo NAME ...]
 #   --id picks the id up front (kebab-case; refused if any open OR archived item has it).
 #   Linking several new items: create them ALL first, take each id from its `added [id]`
 #   line (or pre-choose with --id), THEN write --waiting-on / cross-references. A link
 #   written before the item exists guesses a slug and dangles when the guess is wrong.
-waypoints.py edit <id> [--title "…"] [--add-point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on]
+waypoints.py edit <id> [--title "…"] [--add-point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on] [--repo NAME ...] [--clear-repo]
 #   --add-point APPENDS a bullet, keeping the existing ones — this is what you want when recording new information.
 #   --point APPENDS a bullet, keeping the existing ones (--add-point is an alias). Only
 #   --replace-points discards the whole list, and it echoes what it dropped. To fix a single
 #   wrong bullet use --set-point N "…" or --rm-point N (1-based, as `show` numbers them).
 waypoints.py show <id>                  # print title + summary + full detail (the "pick it up" view)
-waypoints.py search "kw" [--all]         # find items by keyword: title, bullets AND detail.
+waypoints.py search "kw" [--all] [--repo NAME]   # find items by keyword: title, bullets AND detail.
                                          # ALWAYS use this to answer "is this already tracked?" --
                                          # `list | grep` misses matches past the view's 96-char
                                          # title truncation and reads as a genuine absence (it
                                          # caused a real duplicate). --all includes archived, which
-                                         # is what answers "was this EVER tracked?".
+                                         # is what answers "was this EVER tracked?". --repo scopes
+                                         # the search to one repo's items.
 waypoints.py done <id> --evidence "…commit <sha>, tests N/N"  # REQUIRED: what was achieved + a
 #                                         concrete reference. An off-hand comment is REFUSED.
 waypoints.py done <id> --no-evidence "superseded by <id>"     # closes without work evidence
@@ -164,6 +174,14 @@ the user can make, a credential, them to be physically present, or an external s
 actionable. Write the reason as *the thing that would unblock it*, not as a restatement of the task
 ("needs the user to choose between A and B", not "blocked"). When the blocker clears, retier it
 (`--tier do-now`) — that drops the stale reason in the same call.
+
+**Tag the repo when there is one.** Most items belong to a repo or project. When adding an item
+that clearly belongs to one, pass `--repo <the bare directory name of its checkout>` (repeatable
+for umbrella items); `edit <id> --repo NAME` appends later and is a safe no-op if the item already
+has it. The value is what `list --repo` / `search --repo` join against, so it is a directory NAME,
+not a path to it (`free-agents`, never `…/free-agents`) — a `/`, blank name, surrounding
+whitespace or a duplicate is refused rather than repaired. Items that belong to no repo just get no
+flag; the field stays absent.
 
 **Blocked on another ITEM, not on a person?** Use `--tier waiting --waiting-on "<id> @ <milestone>"`
 instead of `gated`. It is the one block this store can clear by itself: closing the target releases

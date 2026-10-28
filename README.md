@@ -82,6 +82,7 @@ waypoints.py edit adobe-publish --point "another bullet"                        
 waypoints.py edit adobe-publish --set-point 2 "fixed typo"                                      # rewrite ONE bullet
 waypoints.py edit adobe-publish --rm-point 2                                                    # remove ONE bullet
 waypoints.py edit adobe-publish --replace-points --point "only bullet now"                       # REPLACES (must be explicit)
+waypoints.py edit adobe-publish --repo cost-tracker        # APPEND a repo (deduped; --clear-repo removes)
 waypoints.py show adobe-publish     # title + summary + full detail — the "pick it up" view
 waypoints.py done adobe-publish --evidence "shipped in 1.4.2, commit a1b2c3d, tests 88/88"
 waypoints.py done adobe-publish --no-evidence "superseded by adobe-upstream"   # no work to point at
@@ -97,6 +98,8 @@ waypoints.py archive show adobe-publish
 waypoints.py rm adobe-publish --delete --confirm   # permanent deletion: archive-only, two flags
 waypoints.py triage adobe-publish --tier gated --gate-reason "needs your call on A vs B"
 waypoints.py list --gated               # also --waiting / --actionable / --untriaged, plus --open
+waypoints.py list --repo free-agents    # one repo's items — composes with the views and --open
+waypoints.py search "spinner" --repo free-agents
 waypoints.py list --json                # documented machine-readable contract
 ```
 
@@ -173,7 +176,10 @@ The banner is injected into **every** session's context, so it is capped: it lis
 `BANNER_MAX_ITEMS` (default 10) highest-priority items, trims over-long titles to one line, and
 discloses the rest as a count rather than listing them. Nothing is hidden — the header counts all
 open items, the residue is counted explicitly, and `waypoints.py list` shows everything. Tune with
-`$WAYPOINTS_BANNER_MAX_ITEMS` and `$WAYPOINTS_BANNER_TITLE_MAX`.
+`$WAYPOINTS_BANNER_MAX_ITEMS` and `$WAYPOINTS_BANNER_TITLE_MAX`. In compact mode, when the listed
+items span two or more repos, each tagged title gains a short `[repo]` marker (multi-repo items:
+`[first+N]`), counted against the title budget so the title is trimmed, never the tag;
+single-repo banners render exactly as before.
 
 ## The `waypoints` command, and why output size is a feature
 
@@ -326,6 +332,28 @@ Two things this deliberately does *not* do:
 
 Triaging is entirely optional — leave it alone and the plugin behaves exactly as before.
 
+## Repo category
+
+Most items belong to a repo or project, and *"show me only that repo's waypoints"* is a
+first-class question. Tag items with the **bare directory name** of their checkout:
+
+```sh
+waypoints.py add "Sweep the changelogs" --repo free-agents   # repeatable — umbrella items list several
+waypoints.py edit some-id --repo cost-tracker   # APPENDS, deduped: re-adding is a safe no-op
+waypoints.py edit some-id --clear-repo          # remove the category (cannot combine with --repo)
+waypoints.py list --repo free-agents            # composes with --gated/--waiting/… and --open
+waypoints.py search "spinner" --repo free-agents
+```
+
+- Values are directory **names**, not paths — a `/` is refused at write, along with empty/blank
+  names, surrounding whitespace and duplicates. Malformed input is never silently repaired: the
+  value is what `--repo` filters join against, so a typo'd entry would place an item outside
+  every filter, reading as "no work happened".
+- `list --repo X` matches when X is **any** element of the item's repos, so an umbrella item
+  surfaces under each repo it names. The filter survives `--json` (the payload names the `repo`
+  filter in force) and is echoed by pagination.
+- An item with no repos is byte-identical to a pre-0.14.0 item — no migration, nothing defaulted.
+
 ## Store
 
 **Never hand-edit this file.** Every change goes through `waypoints.py`. It is one JSON document,
@@ -350,12 +378,12 @@ store where you never triage anything is byte-identical to one from before the f
 independently of the store, so the on-disk shape stays free to change:
 
 ```json
-{ "contract": 1, "generated": "2026-08-14",
+{ "contract": 3, "generated": "2026-08-14",
   "counts": { "total": 12, "open": 9, "done": 3, "surfaceable": 9,
-              "gated": 2, "actionable": 4, "untriaged": 3 },
+              "gated": 2, "waiting": 0, "actionable": 4, "untriaged": 3, "pinned": 0 },
   "items": [ { "id": "…", "title": "…", "summary": [], "detail": "…", "created": "…",
                "surface_on": null, "done": false, "priority": 0, "surfaceable": true,
-               "tier": null, "gate_reason": null } ] }
+               "tier": null, "gate_reason": null, "repos": null } ] }
 ```
 
 The journal is machine-readable by construction — one JSON object per line, each carrying its own
