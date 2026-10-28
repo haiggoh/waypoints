@@ -189,3 +189,16 @@ failing tripwire test.
   items, re-verified red under the mutations. Mutations verified: list filter, json filter,
   pagination echo, search filter, scope suffix — all 5 jointly broken → 8 red; restored →
   green. Suite 392 passed; version check ALL PASS.
+- 2026-10-28 M3 review DONE (local DeepSeek V4 Flash, cross-family): ~22 numbered items
+  reducing to ~8 unique. TWO REAL, both fixed forward: (1) the pagination echo did not
+  QUOTE a repo name containing spaces (legal values) — the printed Next: command would
+  split `--repo free agents` into two tokens and break on re-run; fixed with
+  shlex.quote in `_next_page_cmd`; (2) `list --repo X --open` over a repo whose items
+  are all done printed "(no waypoints for repo X)", implying the repo has none at all —
+  now "(no OPEN waypoints for repo X)". REJECTED with reasons: making a repo-scoped
+  empty `search` exit 0 (uniform rc semantics is what scripts key on — an empty search
+  is rc 1 today in every scope); the payload `view` collapsing view+`--open` to the
+  view name (pre-existing behavior, preserved byte-identically by M3 — the payload never
+  described --open separately). The reviewer self-verified the rest as non-defects
+  (view key honest in all combos, scope lines accurate, no filter dropped in --json).
+  Both fixes TDD'd (red first) and mutation-verified jointly with M4's guards.

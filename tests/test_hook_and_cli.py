@@ -1808,3 +1808,25 @@ def test_cli_search_repo_empty_names_the_scope(tmp_path):
     r = _run([CLI, "search", "Needle", "--repo", "no-such-repo"], store)
     assert "no item matched" in r.stdout.lower()
     assert "no-such-repo" in r.stdout
+
+
+def test_cli_list_repo_echo_quotes_a_repo_name_with_spaces(tmp_path):
+    # A repo name may legally contain internal spaces, and the echoed Next: command must be
+    # RE-RUNNABLE as printed — unquoted, `--repo free agents` parses as two tokens and the
+    # second becomes a stray positional. Found by the M3 cross-family review.
+    store = tmp_path / "s.json"
+    for n in range(3):
+        _run([CLI, "add", f"Spacey item {n}", "--repo", "free agents"], store)
+    r = _run([CLI, "list", "--repo", "free agents", "--limit", "1"], store)
+    assert "Next: waypoints list --repo 'free agents' --limit 1 --page 2" in r.stdout
+
+
+def test_cli_list_repo_open_empty_names_both_filters(tmp_path):
+    # `--repo free-agents --open` over a repo whose items are all DONE: saying only "no
+    # waypoints for repo free-agents" implies the repo has none at all, when they are
+    # merely closed. Both filters in force get named. Found by the M3 review.
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "Only done here", "--repo", "free-agents"], store)
+    _run([CLI, "done", "only-done-here", "--no-evidence", "test setup"], store)
+    r = _run([CLI, "list", "--repo", "free-agents", "--open"], store)
+    assert "no open waypoints for repo free-agents" in r.stdout

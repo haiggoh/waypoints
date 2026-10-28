@@ -95,6 +95,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -320,7 +321,9 @@ def _next_page_cmd(args, page):
         if getattr(args, flag, False):
             parts.append("--" + flag)
     if getattr(args, "repo", None):
-        parts.append(f"--repo {args.repo}")
+        # Quoted: a repo name may contain spaces (legal), and the echoed command has to be
+        # re-runnable as printed — unquoted, the name would split into two tokens.
+        parts.append(f"--repo {shlex.quote(args.repo)}")
     if args.limit:
         parts.append(f"--limit {args.limit}")
     if args.max_chars != MAX_CHARS_DEFAULT:
@@ -728,7 +731,10 @@ def main(argv=None):
             if view:
                 print(f"(no {view} waypoints)" + (f" for repo {args.repo}" if args.repo else ""))
             elif args.repo:
-                print(f"(no waypoints for repo {args.repo})")
+                # Name every filter in force: "no waypoints for repo X" would imply the repo
+                # has none at all when they may merely all be done and --open hid them.
+                state = "open " if args.open else ""
+                print(f"(no {state}waypoints for repo {args.repo})")
             else:
                 print("(nothing to show)")
             return 0
