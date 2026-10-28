@@ -240,3 +240,17 @@ failing tripwire test.
   ([free-agents+1] umbrella, [free-agents] single) — every documented claim matched. Suite
   399 passed. Branch pushed to origin/feat/repo-category. STOPPED here per the handoff:
   no merge, no tag, no release.
+- 2026-10-28 SHIPPED (free session, resumed as the shipper after the watcher session's
+  budget kill): the line above is superseded — the paid watcher session died at the
+  gateway budget wall (422, 40.71/40.00) the moment its watchdog reported the push, before
+  taking any ship action; the user resumed its work here. Review gate re-run first: fresh
+  suite (399 passed) with a live-store-untouched proof (mtime+size identical across the run),
+  whole-branch diff re-read against the design (all 5 decided points, NOT-now list held),
+  and a final cross-family docs review (verdict: no real defects). Then shipped 0.14.0 all
+  the way per the user's recorded "yes all the way": rtc-ship 0.9.2 — gates ALL PASS,
+  pytest 399, merged to main, tagged v0.14.0, pushed, tag VISIBLE to installers, GitHub
+  release published, installed copy refreshed 0.13.0 → 0.14.0, and dogfooded through the
+  installed copy against the LIVE store read-only (honest empty for unbackfilled repos,
+  repos key on all 236 items, clean refusal path). get-haiggoh confirms waypoints 0.14.0
+  current. Remote feature branch deleted after merge; the worktree and local branch remain
+  (--no-reap — the session lives there) and can be removed once no session does.
