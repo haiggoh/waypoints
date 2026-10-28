@@ -1611,6 +1611,12 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=()):
     shown = listable[:BANNER_MAX_ITEMS]
     unlisted = len(listable) - len(shown)
     compact = len(shown) > COMPACT_THRESHOLD
+    # 0.14.0 repo tag: COMPACT mode only, and only when the LISTED items span 2+ distinct
+    # repos — the one case where "which repo is this?" is a question the banner cannot
+    # answer otherwise. A single-repo span (and every non-compact banner) renders
+    # BYTE-IDENTICAL to pre-repos output: the banner is paid on every session, so the
+    # common case must not change by one byte (pinned by the byte-identity tests).
+    tag_repos = compact and len({r for i in shown for r in repos_of(i)}) >= 2
     header = (f"🧭 waypoints: {len(items)} open waypoint(s) still ahead — they persist until "
                f"done. Just ask me to add or complete one; disable via /plugin if unwanted:")
     lines = [_wrap(header, "")]
@@ -1626,6 +1632,12 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=()):
     date_indent = " " * len(bullet_indent)
     for i in shown:
         title = _short_title(i["title"]) if compact else i["title"]
+        if tag_repos and repos_of(i):
+            rs = repos_of(i)
+            tag = " [%s]" % rs[0] if len(rs) == 1 else " [%s+%d]" % (rs[0], len(rs) - 1)
+            # The tag counts against BANNER_TITLE_MAX: the TITLE is trimmed to make room,
+            # because the tag is the one part a reader must not lose to an ellipsis.
+            title = _short_title(i["title"], BANNER_TITLE_MAX - len(tag)) + tag
         indent = (pinned_indent if is_pinned(i)
                   else gated_indent if is_gated(i)
                   else waiting_indent if is_waiting(i) else bullet_indent)

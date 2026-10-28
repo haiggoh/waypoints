@@ -202,3 +202,15 @@ failing tripwire test.
   described --open separately). The reviewer self-verified the rest as non-defects
   (view key honest in all combos, scope lines accurate, no filter dropped in --json).
   Both fixes TDD'd (red first) and mutation-verified jointly with M4's guards.
+- 2026-10-28 M4 done (free session, GLM 5.3): the conditional banner tag in
+  `waypoints_core.py` `format_banner` — compact mode only, and only when the LISTED
+  (post-cap) items span 2+ distinct repos; each repos-carrying title gains ` [repo]`
+  (multi-repo: ` [first+N]`); items without repos get no tag even in tag mode. The tag
+  counts against BANNER_TITLE_MAX (title trimmed, tag never). BYTE-IDENTICAL otherwise,
+  proven by two pins that render repos-carrying items against their repos-stripped twins
+  and demand exact equality (non-compact; compact single-repo span) — these passed BEFORE
+  the implementation and stayed green after. Mutations verified jointly with the M3 fixes:
+  always-tag (condition dropped) → both byte-identity pins red; no-budget → budget test
+  red; unquoted echo; dropped open-word → both fix tests red. Suite 399 passed; version
+  check ALL PASS. Design note: the span is computed over `shown` (post-BANNER_MAX_ITEMS
+  cap) — "the LISTED items" per the handoff; unlisted tail items do not trigger tagging.

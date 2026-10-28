@@ -1760,3 +1760,81 @@ def test_journal_records_a_repos_change(tmp_path, monkeypatch):
     ch = entries[0]["changes"]
     assert ch[0]["before"].get("repos") is None
     assert ch[0]["after"]["repos"] == ["free-agents"]
+
+
+# ---- M4 (0.14.0): the compact banner's conditional repo tag --------------------------------
+#
+# A one-word [repo] tag, COMPACT mode only, and only when the LISTED items span 2+ distinct
+# repos — the one case where "which repo is this?" is a question the banner cannot answer
+# otherwise. Every other case must render BYTE-IDENTICAL to a pre-repos banner: the banner
+# is paid on every session, so the common case must not change by one byte. The tag counts
+# against BANNER_TITLE_MAX; the tag is the part that survives a trim.
+
+
+def _strip_repos(items):
+    """The same items without the repos field — the byte-identity baseline."""
+    out = []
+    for i in items:
+        j = dict(i)
+        j.pop("repos", None)
+        out.append(j)
+    return out
+
+
+def test_banner_non_compact_with_repos_is_byte_identical_to_without():
+    items = []
+    c.add_item(items, "alpha belongs to fa", repos=["free-agents"], summary=["a bullet"])
+    c.add_item(items, "beta belongs to ct", repos=["cost-tracker"])
+    a = c.format_banner(c.surfaceable(items, "2026-10-27"), ungate_hint=False)
+    b = c.format_banner(c.surfaceable(_strip_repos(items), "2026-10-27"), ungate_hint=False)
+    assert a == b
+
+
+def test_banner_compact_single_repo_span_is_byte_identical_to_without():
+    # Compact mode, but every listed item belongs to ONE repo: still no tag. Tagging the
+    # single-repo case would change the common banner for zero information.
+    items = []
+    for n in range(c.COMPACT_THRESHOLD + 1):
+        c.add_item(items, f"same repo item {n}", repos=["free-agents"])
+    a = c.format_banner(c.surfaceable(items, "2026-10-27"), ungate_hint=False)
+    b = c.format_banner(c.surfaceable(_strip_repos(items), "2026-10-27"), ungate_hint=False)
+    assert a == b
+
+
+def test_banner_compact_multi_repo_span_tags_each_title():
+    items = []
+    c.add_item(items, "alpha in free-agents", repos=["free-agents"])
+    for n in range(c.COMPACT_THRESHOLD):
+        c.add_item(items, f"filler in cost-tracker {n}", repos=["cost-tracker"])
+    c.add_item(items, "no repo here")
+    b = c.format_banner(c.surfaceable(items, "2026-10-27"), ungate_hint=False)
+    flat = " ".join(b.split())
+    assert "alpha in free-agents [free-agents]" in flat
+    assert "filler in cost-tracker 0 [cost-tracker]" in flat
+    assert "no repo here [" not in flat          # no repos -> no tag, even in tag mode
+
+
+def test_banner_multi_repo_item_tags_first_repo_plus_count():
+    items = []
+    c.add_item(items, "umbrella item", repos=["free-agents", "cost-tracker", "run-to-completion"])
+    for n in range(c.COMPACT_THRESHOLD):
+        c.add_item(items, f"filler other repo {n}", repos=["audit-loose-ends"])
+    b = c.format_banner(c.surfaceable(items, "2026-10-27"), ungate_hint=False)
+    flat = " ".join(b.split())
+    assert "umbrella item [free-agents+2]" in flat
+
+
+def test_banner_tag_counts_against_the_title_budget(monkeypatch):
+    # A small budget makes the arithmetic legible: title + tag must fit BANNER_TITLE_MAX
+    # TOGETHER, and the tag is never the part that gets trimmed. Un-budgeted, the title
+    # would be trimmed at 40 and the tag would then overflow it.
+    monkeypatch.setattr(c, "BANNER_TITLE_MAX", 40)
+    items = []
+    c.add_item(items, "x" * 60, repos=["free-agents"])
+    for n in range(c.COMPACT_THRESHOLD):
+        c.add_item(items, f"filler ct {n}", repos=["cost-tracker"])
+    b = c.format_banner(c.surfaceable(items, "2026-10-27"), ungate_hint=False)
+    line = [ln for ln in b.splitlines() if "[free-agents]" in ln][0]
+    assert "…" in line                      # the title was trimmed to make room
+    title_part = line[:line.index(" [free-agents]")].removeprefix("  • ")
+    assert len(title_part) <= 40 - len(" [free-agents]") + 1   # (+1 = the ellipsis)
