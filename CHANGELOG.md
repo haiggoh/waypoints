@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.2] — 2026-10-31
+
+### Changed — description rewritten to current capabilities (rtc-1.0.0 plan, Part B2)
+
+- plugin.json description set to the user-approved text
+  (2026-10-31-approved-plugin-descriptions.json); identical text lands in the
+  get-haiggoh catalog in the same rollout. Version 0.14.1 → 0.14.2.
+
 All notable changes to `waypoints` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
