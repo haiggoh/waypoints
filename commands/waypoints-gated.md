@@ -29,3 +29,5 @@ Then, for the user:
 
 A gate reason is a question the user owes themselves. Reading it back to them is the point of this
 command — do not silently skip an item because its blocker looks tedious.
+
+Branding: lead your reply with `🧭 waypoints:` so the user sees the plugin behind the list.
