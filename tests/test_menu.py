@@ -508,3 +508,21 @@ def test_search_action_offers_the_archive(monkeypatch):
     it — so the widening flag has to be offered rather than requiring a re-run."""
     calls, _rc = drive(monkeypatch, ["search", "spinner", "y", "q"])
     assert calls and calls[0] == ["search", "spinner", "--all"]
+
+
+# --------------------------------------------------------------------------- branding
+
+
+def test_menu_opens_with_the_branded_title_and_subtitle(monkeypatch, capsys):
+    """csl-style menu header (user spec 2026-11-03): the repo's About mark + the proper
+    (non-kebab) name on the title line, a styled subtitle under it, the '=' rule — and all
+    of it BEFORE the existing prompt line."""
+    drive(monkeypatch, ["q"])
+    out = capsys.readouterr().out
+    block = (
+        "🧭 Waypoints\n"
+        "   Persistent open-items that surface every session until each is done\n"
+        + "=" * 72 + "\n"
+    )
+    assert block in out
+    assert out.index("🧭 Waypoints") < out.index("What would you like to do?")

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.14.3] — 2026-11-03
+
+### Added — 🧭 branded menu header (menu-restyle batch, user spec 2026-11-03)
+
+- The interactive selector (`waypoints menu`; bare `waypoints` on a TTY) opens with a
+  csl-style header — 🧭 Waypoints / subtitle / `=` rule — before the action prompt, so
+  the menu names its plugin the way the csl picker and get-haiggoh-menu do. Pinned by
+  `tests/test_menu.py` (exact block + ordering against the prompt line), mutation-checked.
+
 ## [0.14.2] — 2026-10-31
 
 ### Changed — description rewritten to current capabilities (rtc-1.0.0 plan, Part B2)

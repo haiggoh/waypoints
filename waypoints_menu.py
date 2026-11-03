@@ -465,6 +465,10 @@ def _flat():
 
 
 def _print_menu():
+    print()
+    print("🧭 Waypoints")
+    print("   Persistent open-items that surface every session until each is done")
+    print("=" * 72)
     print("\nWhat would you like to do?  (number, or the name; q to quit)")
     n = 0
     for group, rows in ACTIONS:
