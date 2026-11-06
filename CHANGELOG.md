@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.14.4] — 2026-11-06
+
+### Added — 🧭 native date/recency filter on `list` and `search`
+
+- `--since YYYY-MM-DD` and `--age Nd` (mutually exclusive) filter by the item's `created`
+  date, composing with the views, `--open`, `--repo`, paging and `--json` (whose payload
+  records the active filter like `--repo`'s). Done items stay hidden without `--all`, as
+  always. `--age` resolves on the `WAYPOINTS_TODAY`-overridable clock, so replays and
+  tests stay deterministic. Malformed values exit non-zero naming the flag.
+  Documented in the usage block and SKILL.md, so "waypoints from the last 7 days" works
+  as a plain prompt via `waypoints.py list --open --age 7d`.
+
+## [0.14.4] — 2026-11-06
+
+- (release notes go here)
+
 ## [0.14.3] — 2026-11-03
 
 ### Added — 🧭 branded menu header (menu-restyle batch, user spec 2026-11-03)

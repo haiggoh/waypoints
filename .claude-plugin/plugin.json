@@ -1,6 +1,6 @@
 {
   "name": "waypoints",
-  "version": "0.14.3",
+  "version": "0.14.4",
   "description": "🧭 Surfaces your open tasks as a SessionStart banner that persists until each item is marked done — reading an explicit store, so it shows exactly what you logged. Manage items by just asking Claude or via the waypoints CLI (add, edit, done, triage, pin, repo tags, search), with journal, backups, archive, and corrupt-store recovery built in. Disable anytime via /plugin.",
   "author": {
     "name": "Heiko Brantsch"
