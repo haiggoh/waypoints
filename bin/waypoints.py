@@ -470,6 +470,14 @@ def main(argv=None):
     pl.add_argument("--repo", default=None, metavar="NAME",
                     help="only items belonging to this repo (matches ANY element of the "
                          "item's repos; composes with the views and --open)")
+    pl.add_argument("--since", default=None, metavar="YYYY-MM-DD",
+                    help="only items CREATED on or after this date (composes with the "
+                         "views, --open and --repo; done items stay hidden without --all, "
+                         "as always)")
+    pl.add_argument("--age", default=None, metavar="Nd",
+                    help="only items CREATED within the last N days — shorthand for "
+                         "--since (today minus N days, on the WAYPOINTS_TODAY-overridable "
+                         "clock); mutually exclusive with --since")
     pa = sub.add_parser("add", help="add an open item")
     pa.add_argument("title")
     pa.add_argument("--point", action="append", default=None,
@@ -532,6 +540,11 @@ def main(argv=None):
     pf.add_argument("--repo", default=None, metavar="NAME",
                     help="only items belonging to this repo (matches ANY element of the "
                          "item's repos)")
+    pf.add_argument("--since", default=None, metavar="YYYY-MM-DD",
+                    help="only matches CREATED on or after this date")
+    pf.add_argument("--age", default=None, metavar="Nd",
+                    help="only matches CREATED within the last N days; mutually "
+                         "exclusive with --since")
 
     pd = sub.add_parser("done", help="mark an item done by id")
     pd.add_argument("id")
@@ -623,6 +636,13 @@ def main(argv=None):
                           "(recovering over a readable store replaces live data)")
     args = p.parse_args(argv)
 
+    # --since/--age (list + search): resolve once, loud failure on malformed values.
+    # getattr: the flags exist only on those two subparsers.
+    try:
+        _since = c.resolve_since(getattr(args, "since", None), getattr(args, "age", None))
+    except ValueError as e:
+        p.error(str(e))
+
     if args.cmd == "recover":
         return _recover(args)
 
@@ -705,6 +725,8 @@ def main(argv=None):
             # ANY-element membership, not whole-list equality: an umbrella item lists
             # several repos and must surface under each of them.
             sel = [i for i in sel if args.repo in c.repos_of(i)]
+        if _since:
+            sel = [i for i in sel if c.within_since(i, _since)]
 
         if args.json:
             # Counts describe the WHOLE store (unfiltered) so a filtered view still tells the
@@ -712,7 +734,7 @@ def main(argv=None):
             # how a partial view gets mistaken for the total. The same reasoning is why --limit
             # and --max-chars are IGNORED here: silently paginated JSON is not a contract.
             payload = c.list_payload(items)
-            if view or args.open or args.repo:
+            if view or args.open or args.repo or _since:
                 keep = {i["id"] for i in sel}
                 payload["items"] = [it for it in payload["items"] if it["id"] in keep]
                 payload["view"] = view or ("open" if args.open else None)
@@ -721,6 +743,8 @@ def main(argv=None):
                 # pagination dropping the filter, one surface over.
                 if args.repo:
                     payload["repo"] = args.repo
+                if _since:
+                    payload["since"] = _since
             print(json.dumps(payload, indent=2, ensure_ascii=False))
             return 0
 
@@ -959,6 +983,8 @@ def main(argv=None):
         for where, pool in pools:
             for it in pool:
                 if args.repo and args.repo not in c.repos_of(it):
+                    continue
+                if _since and not c.within_since(it, _since):
                     continue
                 fields = []                      # (label, text) for every place a match can hide
                 fields.append(("title", it.get("title") or ""))

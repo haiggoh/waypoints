@@ -93,6 +93,39 @@ def today():
     return os.environ.get("WAYPOINTS_TODAY") or datetime.date.today().isoformat()
 
 
+def resolve_since(since=None, age=None):
+    """Normalize --since/--age to a YYYY-MM-DD lower bound (inclusive), or None when
+    neither is given. Exactly one may be supplied; malformed values raise ValueError
+    naming the flag, which the CLI turns into a loud argparse error. `age` ("Nd")
+    resolves against today() — the WAYPOINTS_TODAY-overridable clock — so tests and
+    manual replays stay coherent with the rest of the date logic."""
+    if since and age:
+        raise ValueError("--since and --age are mutually exclusive")
+    if not since and not age:
+        return None
+    if since:
+        try:
+            return datetime.datetime.strptime(since, "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            raise ValueError("--since expects YYYY-MM-DD, got %r" % (since,))
+    m = re.fullmatch(r"(\d+)d", (age or "").strip().lower())
+    if not m:
+        raise ValueError("--age expects Nd (e.g. 7d), got %r" % (age,))
+    base = datetime.date.fromisoformat(today())
+    return (base - datetime.timedelta(days=int(m.group(1)))).isoformat()
+
+
+def within_since(item, since):
+    """True when the item's created date is on or after the since bound (inclusive).
+    An item with an unparseable created date is EXCLUDED: a filter must not silently
+    pass what it cannot date."""
+    c_date = (item.get("created") or "")[:10]
+    try:
+        return datetime.date.fromisoformat(c_date) >= datetime.date.fromisoformat(since)
+    except ValueError:
+        return False
+
+
 class StoreCorrupt(Exception):
     """The store file exists but is not a readable store.
 

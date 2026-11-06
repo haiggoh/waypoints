@@ -1830,3 +1830,91 @@ def test_cli_list_repo_open_empty_names_both_filters(tmp_path):
     _run([CLI, "done", "only-done-here", "--no-evidence", "test setup"], store)
     r = _run([CLI, "list", "--repo", "free-agents", "--open"], store)
     assert "no open waypoints for repo free-agents" in r.stdout
+
+
+# ---- native date/recency filter: --since YYYY-MM-DD and --age Nd (list + search) ----
+
+def _date_fixture(store):
+    """Four open items created on different days under the pinned clock, plus one recent
+    item that is done. today() = 2026-07-20 throughout."""
+    _run([CLI, "add", "Recent A"], store, "2026-07-20")   # today
+    _run([CLI, "add", "Mid B"], store, "2026-07-17")      # 3d ago
+    _run([CLI, "add", "Old C"], store, "2026-07-10")      # 10d ago (outside 7d)
+    _run([CLI, "add", "Ancient D"], store, "2026-06-20")  # 30d ago
+    _run([CLI, "add", "Done Recent E"], store, "2026-07-19")
+    _run([CLI, "done", "done-recent-e", "--no-evidence", "test setup"], store, "2026-07-20")
+
+
+def test_list_since_selects_exactly_the_recent_open_items(tmp_path):
+    store = tmp_path / "s.json"
+    _date_fixture(store)
+    r = _run([CLI, "list", "--open", "--since", "2026-07-13"], store, "2026-07-20")
+    assert r.returncode == 0
+    out = r.stdout
+    assert "[recent-a]" in out and "[mid-b]" in out          # within the window
+    assert "[old-c]" not in out and "[ancient-d]" not in out # outside it
+    assert "[done-recent-e]" not in out                      # done stays excluded (no --all)
+
+
+def test_list_since_with_all_includes_recent_done_items(tmp_path):
+    store = tmp_path / "s.json"
+    _date_fixture(store)
+    r = _run([CLI, "list", "--all", "--since", "2026-07-13"], store, "2026-07-20")
+    assert r.returncode == 0
+    assert "[done-recent-e]" in r.stdout                     # recent + done, --all lifts the default
+    assert "[ancient-d]" not in r.stdout                     # the date filter still applies
+
+
+def test_list_age_equals_since_seven_days_ago(tmp_path):
+    store = tmp_path / "s.json"
+    _date_fixture(store)
+    a = _run([CLI, "list", "--open", "--age", "7d"], store, "2026-07-20").stdout
+    b = _run([CLI, "list", "--open", "--since", "2026-07-13"], store, "2026-07-20").stdout
+    assert a == b                                            # same window, same selection
+    assert "[recent-a]" in a and "[old-c]" not in a
+
+
+def test_list_since_and_age_are_mutually_exclusive(tmp_path):
+    store = tmp_path / "s.json"
+    _date_fixture(store)
+    r = _run([CLI, "list", "--since", "2026-07-13", "--age", "7d"], store, "2026-07-20")
+    assert r.returncode != 0
+
+
+def test_malformed_since_and_age_fail_loudly_naming_the_flag(tmp_path):
+    store = tmp_path / "s.json"
+    _date_fixture(store)
+    bad_since = _run([CLI, "list", "--open", "--since", "2026-13-99"], store, "2026-07-20")
+    assert bad_since.returncode != 0
+    assert "--since" in (bad_since.stdout + bad_since.stderr)
+    bad_age = _run([CLI, "list", "--open", "--age", "7x"], store, "2026-07-20")
+    assert bad_age.returncode != 0
+    assert "--age" in (bad_age.stdout + bad_age.stderr)
+
+
+def test_unknown_list_flag_still_exits_nonzero_with_usage(tmp_path):
+    store = tmp_path / "s.json"
+    _date_fixture(store)
+    r = _run([CLI, "list", "--nonsense"], store, "2026-07-20")
+    assert r.returncode != 0
+    assert "usage" in (r.stdout + r.stderr).lower()
+
+
+def test_search_composes_the_date_filter_with_the_keyword(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "kw recent note"], store, "2026-07-20")
+    _run([CLI, "add", "kw ancient note"], store, "2026-06-20")
+    r = _run([CLI, "search", "kw", "--age", "7d"], store, "2026-07-20")
+    assert r.returncode == 0
+    assert "[kw-recent-note]" in r.stdout
+    assert "[kw-ancient-note]" not in r.stdout
+    r2 = _run([CLI, "search", "kw", "--age", "40d"], store, "2026-07-20")
+    assert "[kw-ancient-note]" in r2.stdout                  # wider window finds both
+
+
+def test_search_malformed_age_fails_loudly(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "kw recent note"], store, "2026-07-20")
+    r = _run([CLI, "search", "kw", "--age", "soon"], store, "2026-07-20")
+    assert r.returncode != 0
+    assert "--age" in (r.stdout + r.stderr)
