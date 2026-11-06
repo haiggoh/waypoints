@@ -58,6 +58,10 @@ dedupes; `--clear-repo` removes). `list --repo NAME` / `search --repo NAME` filt
 items and compose with the views. The value is a directory NAME, not a path — a `/` is refused
 at write, as are blank names, surrounding whitespace and duplicates.
 
+**Recency filter.** `list --since YYYY-MM-DD` / `--age Nd` (and the same on `search`) filter by
+the item's `created` date and compose with everything above — for a plain "waypoints from the
+last 7 days" prompt, run `waypoints.py list --open --age 7d` instead of reading the store.
+
 ## Reading the queue programmatically
 
 `waypoints.py list --json` emits a **documented contract** — use it instead of parsing the store

@@ -15,6 +15,9 @@ hand either: run `waypoints.py recover`.
     waypoints list --gated|--waiting|--actionable|--untriaged   # symmetric views; --open drops done
     waypoints list [--limit N] [--page N] [--max-chars N] [--all]   # paging, see below
     waypoints list --repo NAME          # only one repo's items (composes with the views/--open)
+    waypoints list --since YYYY-MM-DD | --age Nd   # only items CREATED in that window
+                                        # (composes with everything; --age rides the
+                                        # WAYPOINTS_TODAY clock; search takes them too)
     waypoints resolve                    # release waiting items whose target has landed
     waypoints triage <id> --tier do-now|heavy|gated|waiting
                         [--gate-reason "…"] [--waiting-on "<item-id> @ <milestone>"] [--clear]
