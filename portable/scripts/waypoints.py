@@ -4,7 +4,7 @@
 NEVER hand-edit ~/.claude/waypoints.json. Every change goes through this CLI. A single botched
 escape makes json.load fail for the WHOLE file, so ALL items become unreadable at once — that
 is how the store was lost on 2026-09-03. If the file already looks broken, do not repair it by
-hand either: run `waypoints.py recover`.
+hand either: run `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py recover`.
 
     waypoints                            # dashboard, then an interactive selector on a terminal
     waypoints menu                       # the selector explicitly (needs a TTY)
@@ -322,7 +322,7 @@ def _render_page(shown, seen_before):
 
 def _next_page_cmd(args, page):
     """The exact command for the next page, echoing the options in force."""
-    parts = ["waypoints", "list"]
+    parts = ["python3", "$CLAUDE_PLUGIN_ROOT/scripts/waypoints.py", "list"]
     for flag in ("gated", "waiting", "actionable", "untriaged", "open", "verbose"):
         if getattr(args, flag, False):
             parts.append("--" + flag)
@@ -406,7 +406,7 @@ def _config(args):
             v, src = c.get_setting(k)
             print(f"  {k:<14} {c.setting_display(k, v):<6} ({src})  — {c.SETTINGS[k][3]}")
         if not args.key:
-            print(f"\n  file: {c.settings_path()}   change: waypoints.py config set <key> <value>")
+            print(f"\n  file: {c.settings_path()}   change: python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py config set <key> <value>")
         return 0
     except c.SettingError as e:
         print(f"waypoints config: {e}", file=sys.stderr)
@@ -442,7 +442,7 @@ def _recover(args):
         # which throws away every change made since the snapshot. Gate that, not the repair.
         print("the current store is READABLE (%d item%s). Recovering would replace it with a "
               "snapshot and lose anything newer.\nRe-run with --yes if that is really what you "
-              "want, or `waypoints.py recover --list` to look first."
+              "want, or `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py recover --list` to look first."
               % (len(readable["items"]), "" if len(readable["items"]) == 1 else "s"),
               file=sys.stderr)
         return 2
@@ -460,7 +460,7 @@ def _recover(args):
     print("recovered %d item%s from %s" % (n, "" if n == 1 else "s", used))
     if quarantined:
         print("the replaced file was kept at %s (outside the rotating ring)" % quarantined)
-    print("journalled — `waypoints.py journal` now shows this recovery.")
+    print("journalled — `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py journal` now shows this recovery.")
     return 0
 
 
@@ -1000,7 +1000,7 @@ def main(argv=None):
 
     if args.cmd == "search":
         # WHY THIS EXISTS. Asked whether a spinner idea was already tracked, a session ran
-        # `waypoints.py list | grep -i spinner` and concluded it was ABSENT. It had been tracked
+        # `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list | grep -i spinner` and concluded it was ABSENT. It had been tracked
         # for two weeks — but `list` TRUNCATES titles, so the rendered line ended "local-identit…"
         # and the match was cut off past the ellipsis. A duplicate item was filed as a result.
         #
@@ -1111,9 +1111,9 @@ def main(argv=None):
             if args.evidence is None and args.no_evidence is None:
                 print(f"refusing to close [{args.id}] without evidence of what was achieved.")
                 print("  Say what was done and point at something concrete:")
-                print(f'    waypoints.py done {args.id} --evidence "…, commit <sha>, tests N/N"')
+                print(f'    python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py done {args.id} --evidence "…, commit <sha>, tests N/N"')
                 print("  If it closes for another reason (duplicate, superseded, obsolete):")
-                print(f'    waypoints.py done {args.id} --no-evidence "superseded by <id>"')
+                print(f'    python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py done {args.id} --no-evidence "superseded by <id>"')
                 return 2
             if args.evidence is not None and args.no_evidence is not None:
                 print("pass either --evidence or --no-evidence, not both")
@@ -1151,7 +1151,7 @@ def main(argv=None):
         if args.resolved is None and it is not None and c.looks_unresolved(it.get("title", "")):
             print(
                 f"⚠️  This title reads as an open question — its ✓ won't say how it resolved.\n"
-                f"    Record the outcome:  waypoints.py done {args.id} --as \"<what actually happened>\"",
+                f"    Record the outcome:  python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py done {args.id} --as \"<what actually happened>\"",
                 file=sys.stderr)
         return 0
 
@@ -1225,7 +1225,7 @@ def main(argv=None):
         try:
             it = c.set_pinned(items, args.id, want, getattr(args, "because", None))
         except ValueError as e:
-            print("%s\nExample: waypoints.py pin %s --because \"user wants it today; the tier "
+            print("%s\nExample: python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py pin %s --because \"user wants it today; the tier "
                   "order would push it past the whole do-now pile\"" % (e, args.id),
                   file=sys.stderr)
             return 2
@@ -1324,17 +1324,17 @@ def main(argv=None):
                 print("refusing: permanent deletion requires BOTH --delete AND --confirm.")
                 print(f"  The archive is the paper trail of how things resolved; deleting it is "
                       f"your call, made deliberately.")
-                print(f"  To really delete:  waypoints.py rm {args.id} --delete --confirm")
+                print(f"  To really delete:  python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py rm {args.id} --delete --confirm")
                 return 2
             if live is not None:
                 print(
                     f"refusing: {args.id} is still in the LIVE store — the two-step deletes "
                     f"from the ARCHIVE only (its purpose is destroying the paper trail, which a "
                     f"live item doesn't have yet).")
-                print(f"  Step 1 (archive it):  waypoints.py rm {args.id}"
+                print(f"  Step 1 (archive it):  python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py rm {args.id}"
                       + ("   [it is OPEN — that step will close it]"
                          if not live.get("done") else ""))
-                print(f"  Step 2 (destroy it):   waypoints.py rm {args.id} --delete --confirm")
+                print(f"  Step 2 (destroy it):   python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py rm {args.id} --delete --confirm")
                 return 2
             arch = c.load_archive()
             aitem = c.get_item(arch["items"], args.id)

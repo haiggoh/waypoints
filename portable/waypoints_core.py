@@ -1,6 +1,6 @@
 """Pure, unit-testable core for the waypoints reminder.
 
-NEVER hand-edit the store JSON. Every change goes through this module (or `waypoints.py`).
+NEVER hand-edit the store JSON. Every change goes through this module (or `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py`).
 One botched escape does not damage one item — json.load then fails for the WHOLE file, and
 every item becomes unreadable at once. This happened on 2026-09-03.
 
@@ -160,16 +160,16 @@ class StoreCorrupt(Exception):
             newest, n = self.backups[0]
             lines.append("   newest VALID backup: %s  (%d item%s)"
                          % (newest, n, "" if n == 1 else "s"))
-            lines.append("   recover with:  waypoints.py recover        # uses that backup")
-            lines.append("                  waypoints.py recover --list # see all candidates")
+            lines.append("   recover with:  python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py recover        # uses that backup")
+            lines.append("                  python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py recover --list # see all candidates")
         else:
             # Still name the command. A reader told only "no backup" has nowhere to go, and the
             # next thing an agent reaches for in that state is the editor.
-            lines.append("   NO valid backup was found in %s — check `waypoints.py recover "
+            lines.append("   NO valid backup was found in %s — check `python3 $CLAUDE_PLUGIN_ROOT/scripts/python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py recover "
                          "--list` yourself before concluding it is gone, and do NOT overwrite "
                          "or hand-repair the store." % backup_dir(self.path))
         lines.append("   Nothing was changed. Never hand-edit this file: every change goes "
-                     "through waypoints.py.")
+                     "through python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py.")
         return "\n".join(lines)
 
 
@@ -1497,7 +1497,7 @@ GATED_COLLAPSE_THRESHOLD = int(os.environ.get("WAYPOINTS_GATED_COLLAPSE_THRESHOL
 # stops being a reminder and becomes a wall of text that crowds out the actual conversation.
 # Ranking is by priority (surfaceable() sorts descending), so the head of the list is the part
 # worth spending context on; the tail is disclosed as a count, never silently dropped, and one
-# `waypoints.py list` shows it in full.
+# `python3 $CLAUDE_PLUGIN_ROOT/scripts/python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list` shows it in full.
 #
 # 0.15.0: the default dropped 10 -> 5, and PINNED items left this count for a section of their
 # own (BANNER_MAX_PINNED) — five pins used to fill all five slots and hide every unpinned item.
@@ -1570,7 +1570,7 @@ def _load_settings_file():
         return {}
     except (OSError, ValueError) as e:
         raise SettingError("settings file %s cannot be read (%s) — fix or delete it, or use "
-                           "`waypoints.py config unset <key>`" % (path, e)) from e
+                           "`python3 $CLAUDE_PLUGIN_ROOT/scripts/python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py config unset <key>`" % (path, e)) from e
     if not isinstance(data, dict):
         raise SettingError("settings file %s is not a JSON object" % path)
     return data
@@ -1764,10 +1764,10 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=(),
     """Banner text for the given (already-surfaceable) items, or '' if none.
 
     ids are intentionally NOT printed here — they read as a redundant restatement of the title
-    right next to them; use `waypoints.py list`/`show <id>` to get an item's id when needed.
+    right next to them; use `python3 $CLAUDE_PLUGIN_ROOT/scripts/python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list`/`show <id>` to get an item's id when needed.
     Past COMPACT_THRESHOLD open items, sub-bullets are dropped (title only) and long titles are
     trimmed to one line, to keep the banner skimmable; full detail stays one
-    `waypoints.py show <id>` away.
+    `python3 $CLAUDE_PLUGIN_ROOT/scripts/python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py show <id>` away.
 
     At most BANNER_MAX_ITEMS items are LISTED — the highest-priority head, since surfaceable()
     has already sorted by priority. The remainder is disclosed as a count rather than listed,
@@ -1834,18 +1834,18 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=(),
                   f"{i.get('pin_reason') or 'no reason recorded'}", date_indent), pin_lines)
     pins_trimmed = any(t for _b, t in pin_blocks.values())
     if compact:
-        note = "(compact mode — run `waypoints.py show <id>` for an item's sub-bullets"
+        note = "(compact mode — run `python3 $CLAUDE_PLUGIN_ROOT/scripts/python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py show <id>` for an item's sub-bullets"
         if any(len(" ".join(i["title"].split())) > BANNER_TITLE_MAX for i in shown):
             note += "; titles are trimmed"
         note += "; pin reasons are trimmed)" if pins_trimmed else ")"
         lines.append(_wrap(note, "  "))
     elif pins_trimmed:
-        lines.append(_wrap("(pin reasons are trimmed — `waypoints.py show <id>` has the "
+        lines.append(_wrap("(pin reasons are trimmed — `python3 $CLAUDE_PLUGIN_ROOT/scripts/python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py show <id>` has the "
                            "full reason)", "  "))
     for n, i in enumerate(shown):
         if n == len(shown_pinned) and pinned_unlisted:
             lines.append(_wrap(f"… and {pinned_unlisted} more pinned, not listed here. "
-                               f"`waypoints.py list` shows every pin first.", "  "))
+                               f"`python3 $CLAUDE_PLUGIN_ROOT/scripts/python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list` shows every pin first.", "  "))
         title = _short_title(i["title"]) if compact else i["title"]
         if tag_repos and repos_of(i):
             rs = repos_of(i)
@@ -1878,10 +1878,10 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=(),
                 lines.append(_wrap(f"gated: {i['gate_reason']}", "      - "))
     if pinned_unlisted and not shown_open:  # no open item followed the pins to trigger it above
         lines.append(_wrap(f"… and {pinned_unlisted} more pinned, not listed here. "
-                           f"`waypoints.py list` shows every pin first.", "  "))
+                           f"`python3 $CLAUDE_PLUGIN_ROOT/scripts/python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list` shows every pin first.", "  "))
     if unlisted:
         lines.append(_wrap(f"… and {unlisted} more open, not listed here (lower priority). "
-                            f"`waypoints.py list` shows every one.", "  "))
+                            f"`python3 $CLAUDE_PLUGIN_ROOT/scripts/python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list` shows every one.", "  "))
     if collapse_gated:
         if ungate_hint is None:
             ungate_hint = plugin_available(UNGATE_PLUGIN)
@@ -1899,9 +1899,9 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=(),
         landed = sum(1 for i in waiting
                      if waiting_status(i, universe, archived)[0] == WAITING_LANDED)
         wl = (f"⏳ {len(waiting)} waiting on another item — nothing for you to do; each "
-              f"releases itself. `waypoints.py list --waiting` shows what each is waiting for")
+              f"releases itself. `python3 $CLAUDE_PLUGIN_ROOT/scripts/python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list --waiting` shows what each is waiting for")
         wl += (f". ⚠️ {landed} of them can move NOW (target already landed) — "
-               f"`waypoints.py resolve` releases them." if landed else ".")
+               f"`python3 $CLAUDE_PLUGIN_ROOT/scripts/python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py resolve` releases them." if landed else ".")
         lines.append(_wrap(wl, "  "))
     return "\n".join(lines)
 

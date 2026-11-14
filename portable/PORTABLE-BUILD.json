@@ -54,7 +54,7 @@
       "adaptation_class": "native-unchanged",
       "evidence_level": "source-inspected",
       "kind": "hook-script",
-      "notes": "stdlib-only, reads the store JSON directly; portable as-is",
+      "notes": "stdlib-only, reads the store JSON directly; host-only PATH guidance in the banner note is rewritten to the scripts/ invocation by TRANSFORMS",
       "path": "hooks/waypoints.py",
       "surfaces": {
         "chat": false,
@@ -114,16 +114,16 @@
   "files": {
     ".claude-plugin/plugin.json": "782d84c78a14e411df15efe9c8427168c3fc2bf48e9d3fdd180de5aebd21c3f0",
     "__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "commands/waypoints-gated.md": "fcc414e248057ce0460f194b63a8b9e76be48a0497c54e8b552380a645c7a5e0",
+    "commands/waypoints-gated.md": "e4263c13311c26fb54a8085fd4481f7ceb1199703d74c12b121813513e01ba19",
     "hooks/hooks.json": "d3abeb75c95f75c0b9cb15bc5e3658a175499da9019815468e3764b5b9ee78ab",
-    "hooks/waypoints.py": "01544befc389450650d002c69c28481664fbc3d80a282a76a41abdffd544eb57",
-    "scripts/waypoints.py": "eda71ecfa375f2ff4b742696ea3d9146aa480898b8c468b5352336ed515557d6",
-    "skills/waypoints/SKILL.md": "d7d30920c09bc2bee935428146a92b27c4a236a53fd32ac2069c7d7bc90f1905",
-    "waypoints_core.py": "b34c4b2ffdc8b93d4a63217dedf5ca8a4401b2fdce812ac3e563430a2e8a3e73",
+    "hooks/waypoints.py": "e8524136633663dc7c2997567b27ddf833630b8714749519484acfb29d3bcf38",
+    "scripts/waypoints.py": "7a24fded1f60d5bdb9cae99509960ea8340a5a11e73962d2fad6ddc2d82ebb92",
+    "skills/waypoints/SKILL.md": "49045658051bf57ef00dc31cbba8c8ba8370eb5358c0bd40e5b8846e530deb29",
+    "waypoints_core.py": "d05befa4ee52e569a5cd58c18d3b795c0130a504206f5b2d4b195754c26e708f",
     "waypoints_menu.py": "0453eff6be210fffd72a387170875641064c2e7510a492d0d0a2363ae2dbdd6b"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "c095d5dab8692647c7e67a435dc1530cd29d33bb",
+  "source_commit": "df1e748140be045fe502976875c91e42d8a4b8eb",
   "source_repo": "haiggoh/waypoints",
   "transform_version": "1"
 }

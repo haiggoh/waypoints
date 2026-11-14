@@ -51,15 +51,21 @@ def test_portable_manifest_same_name_no_bin():
 
 
 def test_no_stale_bin_references_and_import_closure_at_root():
+    # any waypoints.py mention that is not the scripts/ path is stale host guidance
+    stale_re = re.compile(r"(?<!scripts/)(?<!hooks/)waypoints\.py")
     for p in sorted(PORTABLE.rglob("*")):
         if p.is_file() and p.suffix in (".json", ".sh", ".py", ".md") \
                 and p.name != "PORTABLE-BUILD.json":  # its notes may name the old path
             text = p.read_text(encoding="utf-8", errors="replace")
-            assert "bin/waypoints.py" not in text, f"stale bin/ ref in {p.relative_to(PORTABLE)}"
+            assert not stale_re.search(text), \
+                f"stale host-PATH guidance in {p.relative_to(PORTABLE)}: {stale_re.search(text).group(0)}"
     for mod in ("waypoints_core.py", "waypoints_menu.py", "__init__.py"):
         assert (PORTABLE / mod).is_file(), f"import-closure module missing at portable root: {mod}"
-    assert (PORTABLE / "scripts" / "waypoints.py").read_bytes() == \
-        (ROOT / "bin" / "waypoints.py").read_bytes(), "CLI copied verbatim after the move"
+    import ast as _ast
+    cli_text = (PORTABLE / "scripts" / "waypoints.py").read_text(encoding="utf-8")
+    _ast.parse(cli_text)  # the transformed portable CLI must still parse
+    assert '"$CLAUDE_PLUGIN_ROOT/scripts/waypoints.py"' in cli_text, \
+        "the moved CLI must invoke via the scripts/ path"
 
 
 def test_host_to_portable_file_set_is_pinned():
@@ -96,7 +102,8 @@ def test_portable_build_json_matches_c2_schema():
         assert k in d, k
     assert d["source_repo"].endswith("/waypoints"), d["source_repo"]
     expected = {str(p.relative_to(PORTABLE)).replace("\\", "/") for p in PORTABLE.rglob("*")
-                if p.is_file() and p.name != "PORTABLE-BUILD.json"}
+                if p.is_file() and p.name != "PORTABLE-BUILD.json"
+                and "__pycache__" not in p.parts}
     assert set(d["files"]) == expected
     for rel, h in d["files"].items():
         assert sha256(PORTABLE / rel) == h, rel
@@ -111,25 +118,37 @@ def test_portable_build_json_matches_c2_schema():
 
 
 def test_portable_cli_runs_against_an_isolated_store(tmp_path):
-    """FUNCTIONAL proof the closure works: the portable CLI must run from the portable
-    root AND honour WAYPOINTS_FILE — a smoke run without the override once wrote a test
-    item into the real ~/.claude/waypoints.json (env var name is WAYPOINTS_FILE)."""
+    """FUNCTIONAL proof the closure works: the portable CLI runs from the portable root,
+    imports the PORTABLE core modules (probe: waypoints_core.__file__ must be under
+    portable/ — with -I and a scrubbed PYTHONPATH the host repo cannot leak in), and
+    honours WAYPOINTS_FILE (a smoke run without that override once wrote a test item
+    into the real ~/.claude/waypoints.json)."""
     store = tmp_path / "w.json"
-    env = dict(os.environ, WAYPOINTS_FILE=str(store), PYTHONDONTWRITEBYTECODE="1")
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["WAYPOINTS_FILE"] = str(store)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     cli = PORTABLE / "scripts" / "waypoints.py"
-    r = subprocess.run([sys.executable, str(cli), "add", "portable smoke", "--id", "p-smoke"],
-                       capture_output=True, text=True, env=env, timeout=30)
+    probe = subprocess.run(
+        [sys.executable, "-I", "-c",
+         "import sys; sys.path.insert(0, sys.argv[1]); import waypoints_core; print(waypoints_core.__file__)",
+         str(PORTABLE)],
+        capture_output=True, text=True, env=env, cwd=tmp_path, timeout=30)
+    assert probe.returncode == 0, probe.stderr
+    assert str(PORTABLE) in probe.stdout, f"core module leaked from outside portable/: {probe.stdout}"
+    r = subprocess.run([sys.executable, "-I", str(cli), "add", "portable smoke", "--id", "p-smoke"],
+                       capture_output=True, text=True, env=env, cwd=tmp_path, timeout=30)
     assert r.returncode == 0, r.stderr
     assert store.is_file(), "the CLI must write the WAYPOINTS_FILE store, not the real one"
-    r2 = subprocess.run([sys.executable, str(cli), "list"], capture_output=True, text=True,
-                        env=env, timeout=30)
+    r2 = subprocess.run([sys.executable, "-I", str(cli), "list"], capture_output=True, text=True,
+                        env=env, cwd=tmp_path, timeout=30)
     assert "p-smoke" in r2.stdout, r2.stdout
     real = Path.home() / ".claude" / "waypoints.json"
-    d = json.loads(real.read_text())
-    items = d.get("items", d) if isinstance(d, dict) else d
-    vals = items if isinstance(items, list) else list(items.values())
-    assert not any(isinstance(i, dict) and i.get("id") == "p-smoke" for i in vals), \
-        "real store must stay untouched"
+    if real.exists():
+        d = json.loads(real.read_text())
+        items = d.get("items", d) if isinstance(d, dict) else d
+        vals = items if isinstance(items, list) else list(items.values())
+        assert not any(isinstance(i, dict) and i.get("id") == "p-smoke" for i in vals), \
+            "real store must stay untouched"
 
 
 def test_zip_is_deterministic_manifest_at_root_and_side_effect_free(tmp_path):
@@ -142,6 +161,8 @@ def test_zip_is_deterministic_manifest_at_root_and_side_effect_free(tmp_path):
     names = zipfile.ZipFile(za).namelist()
     assert ".claude-plugin/plugin.json" in names
     assert "scripts/waypoints.py" in names and not any(n.startswith("bin/") for n in names)
+    for mod in ("waypoints_core.py", "waypoints_menu.py", "__init__.py"):
+        assert mod in names, f"import-closure module missing from zip: {mod}"
     assert not any(n.startswith("portable/") or "\\" in n for n in names)
     after = {str(p.relative_to(PORTABLE)): sha256(p) for p in PORTABLE.rglob("*") if p.is_file()}
     assert before == after

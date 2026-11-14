@@ -10,14 +10,14 @@ description: Use to manage the user's persistent open-items reminder ("waypoints
 - NEVER open `~/.claude/waypoints.json` in an editor.
 - NEVER write it with `cat >`, `sed`, `python -c`, `jq`, or a heredoc.
 - NEVER "fix" it by hand, even when it already looks broken.
-- Make EVERY change with `waypoints.py` — `add`, `edit`, `done`, `rm`, `triage`, `reopen`.
+- Make EVERY change with `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py` — `add`, `edit`, `done`, `rm`, `triage`, `reopen`.
 - Reason: the file is ONE JSON document. One bad quote makes `json.load` fail for the whole
   file, so ALL items become unreadable at once — not the one you touched.
 - This happened on 2026-09-03. A hand-edit spliced unescaped prose into an item and the entire
   store went unreadable.
-- If the file IS broken: run `waypoints.py recover`. It puts the newest backup that actually
+- If the file IS broken: run `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py recover`. It puts the newest backup that actually
   parses back in place, keeps the damaged file, and records the recovery in the journal.
-- If a command seems awkward, run `waypoints.py --help`. Do not fall back to editing the file.
+- If a command seems awkward, run `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py --help`. Do not fall back to editing the file.
 - If the reason to reach for an editor is "I do not remember the command", run `waypoints` with
   no arguments **on a terminal**: it prints the dashboard and then an interactive selector over
   the whole command surface, echoing each real invocation before running it. It composes an argv
@@ -35,7 +35,7 @@ native *checkpoints* (`/rewind` — an undo/restore snapshot you go *backward* t
 
 `~/.claude/waypoints.json` (override with `$WAYPOINTS_FILE`), a user file **outside** this plugin so
 updates never touch it. The shape below is documentation for reading — **not** an invitation to
-write it (see rule zero); to read it programmatically use `waypoints.py list --json`:
+write it (see rule zero); to read it programmatically use `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list --json`:
 ```json
 { "version": 1, "items": [
   { "id": "kebab-slug", "title": "one-line headline (banner)",
@@ -60,11 +60,11 @@ at write, as are blank names, surrounding whitespace and duplicates.
 
 **Recency filter.** `list --since YYYY-MM-DD` / `--age Nd` (and the same on `search`) filter by
 the item's `created` date and compose with everything above — for a plain "waypoints from the
-last 7 days" prompt, run `waypoints.py list --open --age 7d` instead of reading the store.
+last 7 days" prompt, run `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list --open --age 7d` instead of reading the store.
 
 ## Reading the queue programmatically
 
-`waypoints.py list --json` emits a **documented contract** — use it instead of parsing the store
+`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list --json` emits a **documented contract** — use it instead of parsing the store
 file, which is free to change shape:
 
 ```json
@@ -103,55 +103,55 @@ are immutable across edits — a stable id is why `edit` exists.
 The user manages waypoints **by talking to you** — they do not type a console command. You add and
 close items on their behalf and surface the open ones in conversation. Use the bundled CLI:
 ```sh
-waypoints.py list                       # Claude Code v2.1.91+ puts the plugin's bin/ on the Bash-tool PATH
-waypoints.py list --json                # the documented contract above (for reading, not parsing the store)
-waypoints                            # bare = dashboard; `waypoints` is on PATH (so is waypoints.py)
-waypoints.py list                    # ONE LINE per item, grouped; --verbose restores the rest
-waypoints.py list --gated|--waiting|--actionable|--untriaged [--open]   # symmetric views
-waypoints.py list [--limit N] [--page N] [--max-chars N] [--all]        # bounded output
-waypoints.py list --repo NAME [--open] # one repo's items; composes with the views above
-waypoints.py triage <id> --tier do-now|heavy|gated|waiting
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list                       # Claude Code v2.1.91+ puts the plugin's bin/ on the Bash-tool PATH
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list --json                # the documented contract above (for reading, not parsing the store)
+waypoints                            # bare = dashboard; `waypoints` is on PATH (so is python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py)
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list                    # ONE LINE per item, grouped; --verbose restores the rest
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list --gated|--waiting|--actionable|--untriaged [--open]   # symmetric views
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list [--limit N] [--page N] [--max-chars N] [--all]        # bounded output
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list --repo NAME [--open] # one repo's items; composes with the views above
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py triage <id> --tier do-now|heavy|gated|waiting
                  [--gate-reason "…"] [--waiting-on "<id> @ <milestone>"]... | --clear
                  # --waiting-on is REPEATABLE; releases only when ALL targets land
-waypoints.py resolve                 # release waiting items whose target landed
-waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on YYYY-MM-DD] [--id slug] [--repo NAME ...]
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py resolve                 # release waiting items whose target landed
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py add "Title" [--point "key pt" ...] [--detail "…"] [--surface-on YYYY-MM-DD] [--id slug] [--repo NAME ...]
 #   --id picks the id up front (kebab-case; refused if any open OR archived item has it).
 #   Linking several new items: create them ALL first, take each id from its `added [id]`
 #   line (or pre-choose with --id), THEN write --waiting-on / cross-references. A link
 #   written before the item exists guesses a slug and dangles when the guess is wrong.
-waypoints.py edit <id> [--title "…"] [--add-point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on] [--repo NAME ...] [--clear-repo]
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py edit <id> [--title "…"] [--add-point "…" ...] [--clear-summary] [--detail "…"] [--surface-on YYYY-MM-DD] [--clear-surface-on] [--repo NAME ...] [--clear-repo]
 #   --add-point APPENDS a bullet, keeping the existing ones — this is what you want when recording new information.
 #   --point APPENDS a bullet, keeping the existing ones (--add-point is an alias). Only
 #   --replace-points discards the whole list, and it echoes what it dropped. To fix a single
 #   wrong bullet use --set-point N "…" or --rm-point N (1-based, as `show` numbers them).
-waypoints.py show <id>                  # print title + summary + full detail (the "pick it up" view)
-waypoints.py search "kw" [--all] [--repo NAME]   # find items by keyword: title, bullets AND detail.
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py show <id>                  # print title + summary + full detail (the "pick it up" view)
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py search "kw" [--all] [--repo NAME]   # find items by keyword: title, bullets AND detail.
                                          # ALWAYS use this to answer "is this already tracked?" --
                                          # `list | grep` misses matches past the view's 96-char
                                          # title truncation and reads as a genuine absence (it
                                          # caused a real duplicate). --all includes archived, which
                                          # is what answers "was this EVER tracked?". --repo scopes
                                          # the search to one repo's items.
-waypoints.py done <id> --evidence "…commit <sha>, tests N/N"  # REQUIRED: what was achieved + a
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py done <id> --evidence "…commit <sha>, tests N/N"  # REQUIRED: what was achieved + a
 #                                         concrete reference. An off-hand comment is REFUSED.
-waypoints.py done <id> --no-evidence "superseded by <id>"     # closes without work evidence
-waypoints.py done <id> [--as "outcome"] # --as rewrites the title to the resolution
-waypoints.py reopen <id>                # undo done (inverse of `done`)
-waypoints.py toggle <id>                # flip an item's done state in one call
-waypoints.py priority <id> <level>      # int; higher sorts earlier in the banner (default 0)
-waypoints.py reorder <id> <position>    # move to an explicit 0-based position in the list
-waypoints.py prune                      # MOVE all done items to the archive (destroys nothing)
-waypoints.py rm <id>                    # remove ONE item from the live store, into the archive
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py done <id> --no-evidence "superseded by <id>"     # closes without work evidence
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py done <id> [--as "outcome"] # --as rewrites the title to the resolution
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py reopen <id>                # undo done (inverse of `done`)
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py toggle <id>                # flip an item's done state in one call
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py priority <id> <level>      # int; higher sorts earlier in the banner (default 0)
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py reorder <id> <position>    # move to an explicit 0-based position in the list
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py prune                      # MOVE all done items to the archive (destroys nothing)
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py rm <id>                    # remove ONE item from the live store, into the archive
 #   Works on an OPEN item too (that is what it is for — clearing a stray probe without a hand-edit);
 #   it closes it on the way out and says so. Bare `rm` NEVER deletes.
-waypoints.py restore <id>               # archive -> live store, still done
-waypoints.py archive list [--json]      # the closed-item paper trail
-waypoints.py archive show <id>          # an archived item's full record
-waypoints.py journal [--id <id>] [--since YYYY-MM-DD]
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py restore <id>               # archive -> live store, still done
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py archive list [--json]      # the closed-item paper trail
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py archive show <id>          # an archived item's full record
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py journal [--id <id>] [--since YYYY-MM-DD]
 #   The append-only mutation history: which command changed what, when, with the before/after of
 #   each item it touched. Never pruned. Use it INSTEAD OF speculating when something looks wrong —
 #   "when did this lose its bullets" is a lookup, not a guess.
-waypoints.py rm <id> --delete --confirm # PERMANENT deletion. Archive-only, both flags required,
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py rm <id> --delete --confirm # PERMANENT deletion. Archive-only, both flags required,
 #   one exact id. Refuses with exit 2 if either flag is missing or the item is still live.
 ```
 Item lifecycle: `open` → `done` (live, out of the banner) → `archived` (separate file, readable and
@@ -207,7 +207,7 @@ an unanswered question — the record then contradicts itself and the *outcome* 
 "Publish the PR") read fine as done and need no `--as`. If you `done` an open-question title without
 `--as`, the CLI prints a non-blocking ⚠️ reminder with the exact `--as` re-run — heed it rather than
 leaving the stale question closed.
-The bare command is **`waypoints.py`** — that's the shipped filename; note the `.py` (bare
+The bare command is **`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py`** — that's the shipped filename; note the `.py` (bare
 `waypoints` will not resolve). If it isn't on PATH (older Claude Code), fall back to
 `python3 "$CLAUDE_PLUGIN_ROOT/scripts/waypoints.py"` while a skill/hook is running, or edit
 `~/.claude/waypoints.json` directly.
@@ -215,7 +215,7 @@ The bare command is **`waypoints.py`** — that's the shipped filename; note the
 ## When to act
 
 - **You see the `waypoints:` startup banner** → those are the user's open items. Help progress the
-  relevant one(s); when one is genuinely finished, mark it done (`waypoints.py done <id> --evidence "…"` — evidence is required and must point at something concrete).
+  relevant one(s); when one is genuinely finished, mark it done (`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py done <id> --evidence "…"` — evidence is required and must point at something concrete).
 - **You create a follow-up** the user should not lose (a deferred task, a blocked item, a "later"
   decision) → `add` it, with a `--surface-on` date if it only becomes relevant later.
 - **Session wrap-up** → reconcile the store *against itself*: `done` what's finished, `edit` titles

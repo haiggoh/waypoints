@@ -96,7 +96,7 @@ try:
                 "hookEventName": "SessionStart",
                 "additionalContext": (
                     alarm + "\n(Tell the user their waypoints store is damaged and offer to run "
-                    "`waypoints.py recover` in a Bash tool — it puts the newest backup that "
+                    "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py recover` in a Bash tool — it puts the newest backup that "
                     "parses back in place and journals the event. Do NOT hand-edit or "
                     "hand-repair the JSON, and do NOT add/close items until it is recovered: "
                     "the first write would make the loss canonical.)"),
@@ -116,14 +116,14 @@ try:
         # LOUD, never a silently-defaulted banner: the user set a limit, and rendering one they
         # did not choose would look healthy while ignoring them. The outer `except` would also
         # swallow this into total silence, so it is caught here on purpose.
-        msg = (f"🧭 waypoints: banner NOT shown — {e}. Fix it with `waypoints.py config set "
+        msg = (f"🧭 waypoints: banner NOT shown — {e}. Fix it with `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py config set "
                f"<key> <value>` / `config unset <key>`, or unset the env var.")
         print(json.dumps({
             "systemMessage": msg,
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": msg + "\n(Tell the user their waypoints banner setting is "
-                                     "invalid and offer to fix it; `waypoints.py config get` "
+                                     "invalid and offer to fix it; `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py config get` "
                                      "shows every setting and where it comes from.)",
             }
         }))
@@ -133,31 +133,31 @@ try:
             # RULE ZERO, first because a model that decides the JSON is easier never reads as
             # far as the CLI usage below. 2026-09-03: one hand-edit made every item unreadable.
             "\nNEVER hand-edit ~/.claude/waypoints.json (or waypoints-archive.json). Every "
-            "change goes through `waypoints.py`. One bad escape makes the WHOLE file unparseable, "
+            "change goes through `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py`. One bad escape makes the WHOLE file unparseable, "
             "so all items are lost at once, not one. If the file already looks broken, do not fix "
-            "it by hand — run `waypoints.py recover`."
+            "it by hand — run `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py recover`."
             "\n(These are the user's persistent open items. The user manages them by talking to "
             "you — they do NOT type a console command; you add and close them on their behalf. When "
-            "one is genuinely finished, close it with `waypoints.py done <id> --evidence \"what was achieved, "
+            "one is genuinely finished, close it with `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py done <id> --evidence \"what was achieved, "
             "pointing at a commit/file/version/test count\"` in a Bash tool — the evidence is REQUIRED and an "
             "off-hand comment with no reference is refused, so say what a reader could go and open; if it closes for "
             "another reason use `--no-evidence \"duplicate/superseded/obsolete\"`. (The "
-            "plugin's bin/ is on the Bash-tool PATH, so the bare command is `waypoints.py` — note "
+            "plugin's ships no bin/ on the PATH, so the bare command is `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py` — note "
             "the .py; `$CLAUDE_PLUGIN_ROOT` is NOT set in a normal shell). Add follow-ups with "
-            "`waypoints.py add \"…\" [--point \"key pt\" ...]`; keep the banner tidy — a short title "
+            "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py add \"…\" [--point \"key pt\" ...]`; keep the banner tidy — a short title "
             "plus a few `--point` bullets, with any long continuity dump in `--detail` (NOT shown in "
-            "the banner). To ADD information to an existing item use `waypoints.py edit <id> --point \"…\"` — it APPENDS, keeping what is there (`--add-point` is the same thing). "
+            "the banner). To ADD information to an existing item use `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py edit <id> --point \"…\"` — it APPENDS, keeping what is there (`--add-point` is the same thing). "
             "To fix ONE wrong bullet use `--set-point N \"…\"` or `--rm-point N` (1-based, as `show` numbers them); only `--replace-points` discards the whole list. "
-            "To retitle, `waypoints.py edit <id> --title …` in place "
+            "To retitle, `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py edit <id> --title …` in place "
             "(keeps the id — never done+re-add, which loses the id/created). The banner shows only "
-            "title+summary; run `waypoints.py show <id>` to read an item's full detail when you pick "
-            "it up. The banner LISTS ONLY the pinned items and the highest-priority others (each capped, see `waypoints.py config get`) and counts the rest — run "
-            "`waypoints.py list` when you need the whole queue, and don't infer from the banner "
-            "alone that an item is absent. To clear a stray or mistaken item use `waypoints.py rm "
+            "title+summary; run `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py show <id>` to read an item's full detail when you pick "
+            "it up. The banner LISTS ONLY the pinned items and the highest-priority others (each capped, see `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py config get`) and counts the rest — run "
+            "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list` when you need the whole queue, and don't infer from the banner "
+            "alone that an item is absent. To clear a stray or mistaken item use `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py rm "
             "<id>` (it ARCHIVES, never deletes, and works on an open item) rather than editing "
-            "the store file by hand; `waypoints.py reopen <id>` brings back anything archived, in "
-            "one step. `waypoints.py archive list` is the closed-item paper trail, and "
-            "`waypoints.py journal [--id <id>]` is the append-only history of which command "
+            "the store file by hand; `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py reopen <id>` brings back anything archived, in "
+            "one step. `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py archive list` is the closed-item paper trail, and "
+            "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py journal [--id <id>]` is the append-only history of which command "
             "changed what — reach for it when something looks wrong rather than guessing. Permanent "
             "deletion exists but is deliberately obscure (`rm <id> --delete --confirm`, "
             "archive-only) — it destroys the record of how something resolved, so it is the user's "

@@ -17,8 +17,8 @@ Portable layout rules (COORDINATION C1, from the loading/platform docs):
   - the Python import closure is copied, never symlinked outside the root (loading.md).
 
 Determinism: ``portable/`` is byte-stable for a given (host tree, source_commit,
-source_repo); the zip additionally pins ZipInfo date_time/external_attr so it is
-byte-stable too. ``--check`` is commit-stable by construction: it rebuilds with the
+source_repo); the zip additionally pins ZipInfo date_time/external_attr, so it is
+byte-stable on one machine/zlib — not a cross-platform guarantee. ``--check`` is commit-stable by construction: it rebuilds with the
 COMMITTED source_commit (read back from portable/PORTABLE-BUILD.json), so the gate is
 green at the shipping commit and at every later HEAD as long as the host files did not
 drift — and red the moment they did.
@@ -68,10 +68,45 @@ COPY_FILES = [
 ]
 HOST_TO_PORTABLE = {"scripts/waypoints.py": "bin/waypoints.py"}
 TRANSFORMS = {
-    "skills/waypoints/SKILL.md": [(r"\$CLAUDE_PLUGIN_ROOT/bin/waypoints\.py",
-                                    "$CLAUDE_PLUGIN_ROOT/scripts/waypoints.py")],
-    "commands/waypoints-gated.md": [(r"\$CLAUDE_PLUGIN_ROOT/bin/waypoints\.py",
-                                     "$CLAUDE_PLUGIN_ROOT/scripts/waypoints.py")],
+    # the CLI path move and every reference to it. Replacements are quote-free so they
+    # are safe inside f-strings in the CLI source as well as markdown.
+    "skills/waypoints/SKILL.md": [
+        ("$CLAUDE_PLUGIN_ROOT/bin/waypoints.py", "$CLAUDE_PLUGIN_ROOT/scripts/waypoints.py"),
+        ("`waypoints.py`", "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py`"),
+        ("`waypoints.py ", "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py "),
+            ("re:" + r"(?<!/)waypoints\.py(?=[\s).])", "python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py"),
+    ],
+    "commands/waypoints-gated.md": [
+        ("$CLAUDE_PLUGIN_ROOT/bin/waypoints.py", "$CLAUDE_PLUGIN_ROOT/scripts/waypoints.py"),
+        ("waypoints.py list --gated $ARGUMENTS",
+         "python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list --gated $ARGUMENTS"),
+        ("`waypoints.py`", "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py`"),
+        ("`waypoints.py ", "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py "),
+            ("re:" + r"(?<!/)waypoints\.py(?=[\s).])", "python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py"),
+    ],
+    "hooks/waypoints.py": [
+        # host-only PATH guidance is FALSE in the portable package (no bin/, scripts/ not on PATH)
+        ("bin/ is on the Bash-tool PATH", "ships no bin/ on the PATH"),
+        ("`waypoints.py`", "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py`"),
+        ("`waypoints.py ", "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py "),
+    ],
+    "scripts/waypoints.py": [
+        ('parts = ["waypoints", "list"]',
+         'parts = ["python3", "$CLAUDE_PLUGIN_ROOT/scripts/waypoints.py", "list"]'),
+        ("`waypoints.py ", "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py "),
+        ("waypoints.py done", "python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py done"),
+        ("waypoints.py config", "python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py config"),
+        # catch-all for remaining un-backticked verb examples; the / lookbehind keeps the
+        # scripts/ path itself (produced by the rules above) intact
+        ("re:" + r"(?<!/)waypoints\.py(?=[\s).])", "python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py"),
+    ],
+    "waypoints_core.py": [
+        ("`waypoints.py`", "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py`"),
+        ("`waypoints.py ", "`python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py "),
+        # un-backticked occurrences inside print() literals (quote-free replacement is safe there)
+        ("waypoints.py ", "python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py "),
+        ("re:" + r"(?<!/)waypoints\.py(?=[\s).])", "python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py"),
+    ],
 }
 
 # component metadata per C2/C3 vocabulary (adaptation class / evidence level / surfaces)
@@ -96,7 +131,7 @@ COMPONENTS = [
     {"path": "hooks/waypoints.py", "kind": "hook-script",
      "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
      "surfaces": {"chat": False, "cowork": True, "code": True},
-     "notes": "stdlib-only, reads the store JSON directly; portable as-is"},
+     "notes": "stdlib-only, reads the store JSON directly; host-only PATH guidance in the banner note is rewritten to the scripts/ invocation by TRANSFORMS"},
     {"path": "scripts/waypoints.py", "kind": "cli",
      "adaptation_class": "mechanical", "evidence_level": "source-inspected",
      "surfaces": {"chat": False, "cowork": True, "code": True},
@@ -160,8 +195,14 @@ def build_tree(root, dest):
         if rel in TRANSFORMS:
             with open(src, encoding="utf-8") as i:
                 text = i.read()
-            for pat, repl in TRANSFORMS[rel]:
-                text = re.sub(pat, repl, text)
+            for old, new in TRANSFORMS[rel]:
+                if old.startswith("re:"):
+                    # catch-all regex rules may legitimately match nothing (earlier rules
+                    # already rewrote the file); literal rules must always match
+                    text, _n = re.subn(old[3:], new, text)
+                else:
+                    assert old in text, f"transform anchor missing in {rel}: {old[:60]!r}"
+                    text = text.replace(old, new)
             with open(dst, "w", encoding="utf-8") as o:
                 o.write(text)
         else:
@@ -171,8 +212,10 @@ def build_tree(root, dest):
     return manifest
 
 
-def write_build_json(dest, root, commit_override):
+def write_build_json(dest, root, commit_override, repo_override=None):
     source_repo, commit = source_identity(root, commit_override)
+    if repo_override:
+        source_repo = repo_override
     files = {}
     for dirpath, _dn, filenames in os.walk(dest):
         for fn in sorted(filenames):
@@ -242,7 +285,7 @@ def write_zip(build_dir, out_dir, name):
         for rel in sorted(walk_files(build_dir)):
             p = os.path.join(build_dir, rel)
             zi = zipfile.ZipInfo(rel, date_time=ZIP_EPOCH)          # fixed timestamp
-            mode = 0o755 if rel.endswith(".sh") else 0o644
+            mode = 0o755 if rel.endswith((".sh", ".py")) else 0o644
             zi.external_attr = (mode & 0xFFFF) << 16                 # fixed mode
             zi.compress_type = zipfile.ZIP_DEFLATED
             with open(p, "rb") as f:
@@ -270,16 +313,19 @@ def main(argv=None):
     # --check is commit-stable: stamp the fresh build with the COMMITTED source_commit,
     # so the gate is green at the shipping commit (a SHA cannot contain itself).
     check_commit = args.commit
+    check_repo = None
     if args.check and check_commit is None and os.path.isfile(
             os.path.join(portable, "PORTABLE-BUILD.json")):
         with open(os.path.join(portable, "PORTABLE-BUILD.json"), encoding="utf-8") as f:
-            check_commit = json.load(f).get("source_commit")
+            committed = json.load(f)
+        check_commit = committed.get("source_commit")
+        check_repo = committed.get("source_repo")
 
     with tempfile.TemporaryDirectory() as tmp:
         fresh = os.path.join(tmp, "portable")
         os.makedirs(fresh)
         build_tree(root, fresh)
-        write_build_json(fresh, root, check_commit or args.commit)
+        write_build_json(fresh, root, check_commit or args.commit, check_repo)
 
         if args.check:
             if not os.path.isdir(portable):

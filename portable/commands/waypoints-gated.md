@@ -9,10 +9,10 @@ them. This expands it.
 Run the bundled CLI and present the result:
 
 ```sh
-waypoints.py list --gated $ARGUMENTS
+python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py list --gated $ARGUMENTS
 ```
 
-If `waypoints.py` isn't on PATH, fall back to
+If `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py` isn't on PATH, fall back to
 `python3 "$CLAUDE_PLUGIN_ROOT/scripts/waypoints.py" list --gated $ARGUMENTS`.
 
 Then, for the user:
@@ -25,7 +25,7 @@ Then, for the user:
    only the user can supply (a decision, a credential, being present, an external system being up).
    Ask those, one group at a time.
 4. When an answer arrives that unblocks an item, **record the new state** rather than only acting
-   on it: `waypoints.py triage <id> --tier do-now` (or `heavy`), which drops the stale gate reason.
+   on it: `python3 $CLAUDE_PLUGIN_ROOT/scripts/waypoints.py triage <id> --tier do-now` (or `heavy`), which drops the stale gate reason.
 
 A gate reason is a question the user owes themselves. Reading it back to them is the point of this
 command — do not silently skip an item because its blocker looks tedious.
