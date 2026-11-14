@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.15.0] — 2026-11-14
+
+### Changed — 🧭 shorter banner: pinned section + user-settable limits
+
+- The banner now lists **5** unpinned items by default (was 10).
+- 📌 Pinned items are their **own section**, listed first with their own cap (default 5), so
+  five pins can no longer fill every slot and hide the unpinned list. Pins beyond the cap are
+  counted (`… and N more pinned`), like the open residue.
+- Pin reasons are trimmed to **2 lines** by default, ending `…`; the compact-mode note says so,
+  and `show <id>` has the full reason.
+
+### Added — banner settings (`config`, menu **settings** group)
+
+- `waypoints.py config get [key] | set <key> <value> | unset <key>` for `banner-items`,
+  `banner-pinned` and `pin-lines` (a number, or `full`). Persisted in
+  `~/.claude/waypoints-settings.json` beside the store (follows `$WAYPOINTS_FILE`).
+- Resolution is env var > settings file > default; new env overrides
+  `$WAYPOINTS_BANNER_MAX_PINNED` and `$WAYPOINTS_BANNER_PIN_LINES` join the existing
+  `$WAYPOINTS_BANNER_MAX_ITEMS`. A set-but-invalid value is refused loudly (CLI exit 2; the
+  SessionStart banner is replaced by an error naming the setting), never silently defaulted.
+- The interactive menu gains a **settings** group: show all settings with their source, and
+  change each one (current value and source shown before the prompt).
+- `config` runs before the store is loaded, so it works even when the store is damaged.
+
 ## [0.14.4] — 2026-11-06
 
 ### Added — 🧭 native date/recency filter on `list` and `search`

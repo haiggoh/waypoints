@@ -19,6 +19,9 @@ hand either: run `waypoints.py recover`.
                                         # (composes with everything; --age rides the
                                         # WAYPOINTS_TODAY clock; search takes them too)
     waypoints resolve                    # release waiting items whose target has landed
+    waypoints config get [key]           # banner settings + where each comes from
+    waypoints config set <key> <value>   # banner-items N | banner-pinned N | pin-lines N|full
+    waypoints config unset <key>         # back to the default (env var > file > default)
     waypoints triage <id> --tier do-now|heavy|gated|waiting
                         [--gate-reason "…"] [--waiting-on "<item-id> @ <milestone>"] [--clear]
     waypoints add "Title" [--point "…" ...] [--detail ...] [--surface-on YYYY-MM-DD]
@@ -382,6 +385,34 @@ def _dashboard(store, items, show_commands=True):
     return 0
 
 
+def _config(args):
+    """`config get|set|unset` — the banner settings. Errors exit 2 naming the setting; an
+    invalid env var or file value is reported, never papered over with the default."""
+    try:
+        if args.config_cmd == "set":
+            v = c.set_setting(args.key, args.value)
+            print(f"{args.key} = {c.setting_display(args.key, v)}  (saved to {c.settings_path()})")
+            env = c.SETTINGS[args.key][0]
+            if os.environ.get(env):
+                print(f"  note: ${env} is set and overrides the file until it is unset.")
+            return 0
+        if args.config_cmd == "unset":
+            c.unset_setting(args.key)
+            print(f"{args.key} removed from {c.settings_path()} — the default applies "
+                  f"unless ${c.SETTINGS[args.key][0]} is set.")
+            return 0
+        keys = [args.key] if args.key else list(c.SETTINGS)
+        for k in keys:
+            v, src = c.get_setting(k)
+            print(f"  {k:<14} {c.setting_display(k, v):<6} ({src})  — {c.SETTINGS[k][3]}")
+        if not args.key:
+            print(f"\n  file: {c.settings_path()}   change: waypoints.py config set <key> <value>")
+        return 0
+    except c.SettingError as e:
+        print(f"waypoints config: {e}", file=sys.stderr)
+        return 2
+
+
 def _recover(args):
     """File-level recovery from a backup — the sanctioned alternative to `cp`.
 
@@ -637,6 +668,16 @@ def main(argv=None):
     prc.add_argument("--yes", action="store_true",
                      help="skip the confirmation when the current store is READABLE "
                           "(recovering over a readable store replaces live data)")
+    pcfg = sub.add_parser("config", help="show or change the banner settings "
+                                         "(env var > settings file > default)")
+    pcfg_sub = pcfg.add_subparsers(dest="config_cmd", required=True)
+    pcg = pcfg_sub.add_parser("get", help="show each setting, its value and where it comes from")
+    pcg.add_argument("key", nargs="?", choices=list(c.SETTINGS))
+    pcs = pcfg_sub.add_parser("set", help="persist a setting in the settings file")
+    pcs.add_argument("key", choices=list(c.SETTINGS))
+    pcs.add_argument("value")
+    pcu = pcfg_sub.add_parser("unset", help="drop a setting from the file (back to the default)")
+    pcu.add_argument("key", choices=list(c.SETTINGS))
     args = p.parse_args(argv)
 
     # --since/--age (list + search): resolve once, loud failure on malformed values.
@@ -648,6 +689,9 @@ def main(argv=None):
 
     if args.cmd == "recover":
         return _recover(args)
+
+    if args.cmd == "config":  # needs no store, so it works even when the store is damaged
+        return _config(args)
 
     try:
         store = c.load_store()

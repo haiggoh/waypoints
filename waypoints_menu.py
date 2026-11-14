@@ -421,6 +421,24 @@ def a_recover(items, arch):
     return ["recover", "--list"]
 
 
+def a_settings(items, arch):
+    return ["config", "get"]
+
+
+def _a_setting(key):
+    """Show the current value and its source, then ask. Validation stays in the CLI (`config
+    set` refuses a bad value and says why), so the menu cannot accept what the CLI would not."""
+    try:
+        value, source = c.get_setting(key)
+        print(f"  current: {c.setting_display(key, value)} ({source})")
+        env = c.SETTINGS[key][0]
+        if source.startswith("env"):
+            print(f"  note: ${env} is set — it overrides the saved value until it is unset.")
+    except c.SettingError as e:
+        print(f"  current value is INVALID: {e}")
+    return ["config", "set", key, ask(c.SETTINGS[key][3], required=True)]
+
+
 ACTIONS = [
     ("look", [
         ("list",       "list items, by view",                 a_list),
@@ -453,6 +471,15 @@ ACTIONS = [
         ("prune",      "move all done items to the archive",  a_prune),
         ("rm",         "archive one open item out of the live store", a_rm),
         ("recover",    "list backups for a store that will not parse", a_recover),
+    ]),
+    ("settings", [
+        ("settings",      "show the banner settings and where each comes from", a_settings),
+        ("banner-items",  "how many unpinned items the banner lists",
+         lambda items, arch: _a_setting("banner-items")),
+        ("banner-pinned", "how many pinned items the banner lists",
+         lambda items, arch: _a_setting("banner-pinned")),
+        ("pin-lines",     "lines per pin reason (a number, or 'full')",
+         lambda items, arch: _a_setting("pin-lines")),
     ]),
 ]
 

@@ -172,11 +172,25 @@ up holding the only surviving copy of a deleted item.
 
 ## Banner size
 
-The banner is injected into **every** session's context, so it is capped: it lists the
-`BANNER_MAX_ITEMS` (default 10) highest-priority items, trims over-long titles to one line, and
-discloses the rest as a count rather than listing them. Nothing is hidden — the header counts all
-open items, the residue is counted explicitly, and `waypoints.py list` shows everything. Tune with
-`$WAYPOINTS_BANNER_MAX_ITEMS` and `$WAYPOINTS_BANNER_TITLE_MAX`. In compact mode, when the listed
+The banner is injected into **every** session's context, so it is capped. 📌 Pinned items come
+first, in a section of their own, so pins never crowd unpinned items out; then the highest-priority
+unpinned items. Each section has its own limit, each pin reason is trimmed to a few lines (ending
+`…`), over-long titles are trimmed to one line, and each section's remainder is disclosed as a
+count rather than listed. Nothing is hidden — the header counts all open items, every residue is
+counted explicitly, and `waypoints.py list` / `show <id>` show everything.
+
+| setting | default | env override | meaning |
+|---|---|---|---|
+| `banner-items` | 5 | `$WAYPOINTS_BANNER_MAX_ITEMS` | unpinned open items listed |
+| `banner-pinned` | 5 | `$WAYPOINTS_BANNER_MAX_PINNED` | pinned items listed |
+| `pin-lines` | 2 | `$WAYPOINTS_BANNER_PIN_LINES` | lines per pin reason (`full` = no trim) |
+
+Change them from the interactive menu's **settings** group, or with
+`waypoints.py config get [key]` / `config set <key> <value>` / `config unset <key>`. They persist in
+`~/.claude/waypoints-settings.json` (beside the store; follows `$WAYPOINTS_FILE`). Resolution is
+env var > settings file > default, and a value that is set but invalid is refused loudly — the
+SessionStart banner is replaced by an error naming the setting, never rendered with a silent
+default. `$WAYPOINTS_BANNER_TITLE_MAX` still tunes the title trim. In compact mode, when the listed
 items span two or more repos, each tagged title gains a short `[repo]` marker (multi-repo items:
 `[first+N]`), counted against the title budget so the title is trimmed, never the tag;
 single-repo banners render exactly as before.

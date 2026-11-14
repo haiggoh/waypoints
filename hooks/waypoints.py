@@ -110,7 +110,24 @@ try:
         archived = c.load_archive().get("items", [])
     except Exception:
         archived = []
-    banner = c.format_banner(items, all_items=all_items, archived=archived)
+    try:
+        banner = c.format_banner(items, all_items=all_items, archived=archived)
+    except c.SettingError as e:
+        # LOUD, never a silently-defaulted banner: the user set a limit, and rendering one they
+        # did not choose would look healthy while ignoring them. The outer `except` would also
+        # swallow this into total silence, so it is caught here on purpose.
+        msg = (f"🧭 waypoints: banner NOT shown — {e}. Fix it with `waypoints.py config set "
+               f"<key> <value>` / `config unset <key>`, or unset the env var.")
+        print(json.dumps({
+            "systemMessage": msg,
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": msg + "\n(Tell the user their waypoints banner setting is "
+                                     "invalid and offer to fix it; `waypoints.py config get` "
+                                     "shows every setting and where it comes from.)",
+            }
+        }))
+        sys.exit(0)
     if banner:
         model_note = banner + (
             # RULE ZERO, first because a model that decides the JSON is easier never reads as
@@ -134,7 +151,7 @@ try:
             "To retitle, `waypoints.py edit <id> --title …` in place "
             "(keeps the id — never done+re-add, which loses the id/created). The banner shows only "
             "title+summary; run `waypoints.py show <id>` to read an item's full detail when you pick "
-            "it up. The banner LISTS ONLY the highest-priority items and counts the rest — run "
+            "it up. The banner LISTS ONLY the pinned items and the highest-priority others (each capped, see `waypoints.py config get`) and counts the rest — run "
             "`waypoints.py list` when you need the whole queue, and don't infer from the banner "
             "alone that an item is absent. To clear a stray or mistaken item use `waypoints.py rm "
             "<id>` (it ARCHIVES, never deletes, and works on an open item) rather than editing "

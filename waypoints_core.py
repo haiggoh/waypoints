@@ -1498,7 +1498,143 @@ GATED_COLLAPSE_THRESHOLD = int(os.environ.get("WAYPOINTS_GATED_COLLAPSE_THRESHOL
 # Ranking is by priority (surfaceable() sorts descending), so the head of the list is the part
 # worth spending context on; the tail is disclosed as a count, never silently dropped, and one
 # `waypoints.py list` shows it in full.
-BANNER_MAX_ITEMS = int(os.environ.get("WAYPOINTS_BANNER_MAX_ITEMS") or 10)
+#
+# 0.15.0: the default dropped 10 -> 5, and PINNED items left this count for a section of their
+# own (BANNER_MAX_PINNED) — five pins used to fill all five slots and hide every unpinned item.
+# All three limits are now user settings, resolved per call by get_setting (env > file > default)
+# rather than read once at import, so the interactive menu's change applies to the next banner.
+BANNER_MAX_ITEMS = 5
+
+# How many PINNED items the banner lists; the rest become a "… and N more pinned" count.
+BANNER_MAX_PINNED = 5
+
+# How many wrapped lines a pin REASON may take. Pin reasons are paragraphs ("PINNED — … because
+# …"), and at 5–7 lines each two pins out-weighed the whole rest of the banner. None = no trim.
+BANNER_PIN_LINES = 2
+
+
+class SettingError(ValueError):
+    """A banner setting that is SET but invalid. Raised, never defaulted: a silent fallthrough
+    would render a banner the user did not configure while every command reports success."""
+
+
+def _parse_count(raw):
+    if isinstance(raw, bool):
+        raise ValueError("expected a whole number >= 0")
+    if isinstance(raw, int):
+        v = raw
+    else:
+        s = str(raw).strip()
+        if not s.isdigit():
+            raise ValueError("expected a whole number >= 0, got %r" % raw)
+        v = int(s)
+    if v < 0:
+        raise ValueError("expected a whole number >= 0, got %r" % raw)
+    return v
+
+
+def _parse_pin_lines(raw):
+    if raw is None or (isinstance(raw, str) and raw.strip().lower() == "full"):
+        return None
+    v = _parse_count(raw)
+    if v < 1:
+        raise ValueError("expected a whole number >= 1 or 'full', got %r" % raw)
+    return v
+
+
+# key -> (env var, default, parser, one-line description). The key is what the CLI, the menu
+# and the settings file all use, so the three can never name one setting two ways.
+SETTINGS = {
+    "banner-items": ("WAYPOINTS_BANNER_MAX_ITEMS", BANNER_MAX_ITEMS, _parse_count,
+                     "unpinned open items the banner lists"),
+    "banner-pinned": ("WAYPOINTS_BANNER_MAX_PINNED", BANNER_MAX_PINNED, _parse_count,
+                      "pinned items the banner lists"),
+    "pin-lines": ("WAYPOINTS_BANNER_PIN_LINES", BANNER_PIN_LINES, _parse_pin_lines,
+                  "lines per pin reason (a number, or 'full')"),
+}
+
+
+def settings_path(store=None):
+    """User settings file, derived from the store path like the archive and journal, so
+    $WAYPOINTS_FILE moves the whole family (tests stay isolated with one env var)."""
+    store = store or store_path()
+    return os.path.splitext(store)[0] + "-settings.json"
+
+
+def _load_settings_file():
+    path = settings_path()
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        raise SettingError("settings file %s cannot be read (%s) — fix or delete it, or use "
+                           "`waypoints.py config unset <key>`" % (path, e)) from e
+    if not isinstance(data, dict):
+        raise SettingError("settings file %s is not a JSON object" % path)
+    return data
+
+
+def _check_key(key):
+    if key not in SETTINGS:
+        raise SettingError("unknown setting %r — known: %s" % (key, ", ".join(SETTINGS)))
+
+
+def get_setting(key):
+    """(value, source) for one banner setting; source is 'env <VAR>', 'file' or 'default'.
+    An empty env var counts as unset (matching the pre-0.15 `or default` behaviour)."""
+    _check_key(key)
+    env, default, parse, _desc = SETTINGS[key]
+    raw = os.environ.get(env)
+    if raw:
+        try:
+            return parse(raw), "env " + env
+        except ValueError as e:
+            raise SettingError("$%s (setting %s) is invalid: %s" % (env, key, e)) from e
+    data = _load_settings_file()
+    if key in data:
+        try:
+            return parse(data[key]), "file"
+        except ValueError as e:
+            raise SettingError("%s in %s is invalid: %s" % (key, settings_path(), e)) from e
+    return default, "default"
+
+
+def setting_display(key, value):
+    return "full" if key == "pin-lines" and value is None else str(value)
+
+
+def _write_settings_file(data):
+    path = settings_path()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
+def set_setting(key, raw):
+    """Validate, then persist. Nothing is written on a refusal. Returns the parsed value."""
+    _check_key(key)
+    _env, _default, parse, _desc = SETTINGS[key]
+    try:
+        value = parse(raw)
+    except ValueError as e:
+        raise SettingError("%s: %s" % (key, e)) from e
+    data = _load_settings_file()
+    data[key] = "full" if value is None else value
+    _write_settings_file(data)
+    return value
+
+
+def unset_setting(key):
+    _check_key(key)
+    data = _load_settings_file()
+    if key in data:
+        del data[key]
+        _write_settings_file(data)
 
 # Titles longer than this are trimmed to one line in the banner. Titles accreted continuity notes
 # ("★ NEXT UP: … — prefix-cache goal already met by …"), which wrap to three lines each and turn
@@ -1604,7 +1740,22 @@ def _wrap(text, indent):
                           break_on_hyphens=False, break_long_words=False)
 
 
-def format_banner(items, ungate_hint=None, all_items=None, archived=()):
+def _trim_lines(block, max_lines):
+    """Cut a wrapped block to `max_lines` lines, ending the last in an ellipsis so it always
+    reads as truncated. None = no limit. Returns (text, trimmed?)."""
+    rows = block.split("\n")
+    if max_lines is None or len(rows) <= max_lines:
+        return block, False
+    rows = rows[:max_lines]
+    last = rows[-1].rstrip()
+    if len(last) + 1 > BANNER_WIDTH:  # keep the ellipsis inside the width budget
+        last = last[:BANNER_WIDTH - 1].rsplit(" ", 1)[0]
+    rows[-1] = last.rstrip(" ,;:—-") + "…"
+    return "\n".join(rows), True
+
+
+def format_banner(items, ungate_hint=None, all_items=None, archived=(),
+                  max_items=None, max_pinned=None, pin_lines=_UNSET):
     # `items` is what to SHOW (already filtered to surfaceable/open by the caller); `all_items` is
     # the universe used to RESOLVE a waiting target. They must be separate: a target that has
     # landed is by definition done, so it is absent from the display list, and resolving against
@@ -1631,18 +1782,34 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=()):
     plugin never advertises a command a given machine does not have."""
     if not items:
         return ""
+    # Limits: an explicit argument wins (tests, callers that already resolved them); otherwise
+    # resolve the user's settings now. get_setting RAISES SettingError on an invalid value —
+    # deliberately not caught here; the hook turns it into a loud banner-not-shown message.
+    if max_items is None:
+        max_items = get_setting("banner-items")[0]
+    if max_pinned is None:
+        max_pinned = get_setting("banner-pinned")[0]
+    if pin_lines is _UNSET:
+        pin_lines = get_setting("pin-lines")[0]
+    # 0.15.0: PINNED items are their own section with their own cap, listed first. Sharing one
+    # cap let five pins fill every slot and hide every unpinned item.
+    pinned = [i for i in items if is_pinned(i)]
+    rest = [i for i in items if not is_pinned(i)]
     # None = probe the machine; a bool = caller decided (tests, and any future caller that
     # already knows). Probing only when gated items will actually collapse keeps the common
     # path free of file reads.
-    gated = [i for i in items if is_gated(i) and not is_pinned(i)]
+    gated = [i for i in rest if is_gated(i)]
     collapse_gated = len(gated) > GATED_COLLAPSE_THRESHOLD
     # A PINNED item is never collapsed away: the pin is an explicit user override of the
-    # ordering, so the one thing the banner must not do is hide it in a count.
-    listable = ([i for i in items if is_pinned(i) or not is_gated(i)] if collapse_gated
-                else items)
-    # Cap the list at the highest-priority head; the tail becomes a count, not a silence.
-    shown = listable[:BANNER_MAX_ITEMS]
-    unlisted = len(listable) - len(shown)
+    # ordering, so the one thing the banner must not do is hide it in a count (it is in
+    # `pinned`, never in `gated`).
+    listable = [i for i in rest if not is_gated(i)] if collapse_gated else rest
+    # Cap each section at its highest-priority head; each tail becomes a count, not a silence.
+    shown_pinned = pinned[:max_pinned]
+    pinned_unlisted = len(pinned) - len(shown_pinned)
+    shown_open = listable[:max_items]
+    unlisted = len(listable) - len(shown_open)
+    shown = shown_pinned + shown_open
     compact = len(shown) > COMPACT_THRESHOLD
     # 0.14.0 repo tag: COMPACT mode only, and only when the LISTED items span 2+ distinct
     # repos — the one case where "which repo is this?" is a question the banner cannot
@@ -1653,17 +1820,32 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=()):
     header = (f"🧭 waypoints: {len(items)} open waypoint(s) still ahead — they persist until "
                f"done. Just ask me to add or complete one; disable via /plugin if unwanted:")
     lines = [_wrap(header, "")]
-    if compact:
-        note = "(compact mode — run `waypoints.py show <id>` for an item's sub-bullets"
-        note += "; titles are trimmed)" if any(
-            len(" ".join(i["title"].split())) > BANNER_TITLE_MAX for i in shown) else ")"
-        lines.append(_wrap(note, "  "))
     pinned_indent = "  📌 "
     bullet_indent = "  • "
     gated_indent = "  ⛔ "
     waiting_indent = "  ⏳ "
     date_indent = " " * len(bullet_indent)
-    for i in shown:
+    # Pin reasons are rendered up front so the note can say whether any was trimmed.
+    pin_blocks = {}
+    for i in shown_pinned:
+        tier_note = f" (tier: {i['tier']})" if i.get("tier") else ""
+        pin_blocks[id(i)] = _trim_lines(
+            _wrap(f"📌 PINNED — do this before the do-now pile{tier_note}: "
+                  f"{i.get('pin_reason') or 'no reason recorded'}", date_indent), pin_lines)
+    pins_trimmed = any(t for _b, t in pin_blocks.values())
+    if compact:
+        note = "(compact mode — run `waypoints.py show <id>` for an item's sub-bullets"
+        if any(len(" ".join(i["title"].split())) > BANNER_TITLE_MAX for i in shown):
+            note += "; titles are trimmed"
+        note += "; pin reasons are trimmed)" if pins_trimmed else ")"
+        lines.append(_wrap(note, "  "))
+    elif pins_trimmed:
+        lines.append(_wrap("(pin reasons are trimmed — `waypoints.py show <id>` has the "
+                           "full reason)", "  "))
+    for n, i in enumerate(shown):
+        if n == len(shown_pinned) and pinned_unlisted:
+            lines.append(_wrap(f"… and {pinned_unlisted} more pinned, not listed here. "
+                               f"`waypoints.py list` shows every pin first.", "  "))
         title = _short_title(i["title"]) if compact else i["title"]
         if tag_repos and repos_of(i):
             rs = repos_of(i)
@@ -1682,10 +1864,8 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=()):
             lines.append(_wrap(f"← {waiting_on_str(i)}", date_indent))
         # The pin REASON shows even in compact mode. A pin overrules the honest tier order, so a
         # reader who cannot see why it outranks everything cannot judge whether it still should.
-        if is_pinned(i):
-            tier_note = f" (tier: {i['tier']})" if i.get("tier") else ""
-            lines.append(_wrap(f"📌 PINNED — do this before the do-now pile{tier_note}: "
-                               f"{i.get('pin_reason') or 'no reason recorded'}", date_indent))
+        if id(i) in pin_blocks:
+            lines.append(pin_blocks[id(i)][0])
         # The date always gets its own line, hanging-indented under the title, so its
         # placement/indentation is fixed regardless of title length or pane width --
         # unlike appending it to the title line, this needs no wrap heuristics.
@@ -1696,6 +1876,9 @@ def format_banner(items, ungate_hint=None, all_items=None, archived=()):
                 lines.append(_wrap(point, "      - "))
             if is_gated(i) and i.get("gate_reason"):
                 lines.append(_wrap(f"gated: {i['gate_reason']}", "      - "))
+    if pinned_unlisted and not shown_open:  # no open item followed the pins to trigger it above
+        lines.append(_wrap(f"… and {pinned_unlisted} more pinned, not listed here. "
+                           f"`waypoints.py list` shows every pin first.", "  "))
     if unlisted:
         lines.append(_wrap(f"… and {unlisted} more open, not listed here (lower priority). "
                             f"`waypoints.py list` shows every one.", "  "))
