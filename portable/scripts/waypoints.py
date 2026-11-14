@@ -1,0 +1,1445 @@
+#!/usr/bin/env python3
+"""CLI to manage the waypoints store.
+
+NEVER hand-edit ~/.claude/waypoints.json. Every change goes through this CLI. A single botched
+escape makes json.load fail for the WHOLE file, so ALL items become unreadable at once — that
+is how the store was lost on 2026-09-03. If the file already looks broken, do not repair it by
+hand either: run `waypoints.py recover`.
+
+    waypoints                            # dashboard, then an interactive selector on a terminal
+    waypoints menu                       # the selector explicitly (needs a TTY)
+    waypoints dashboard                  # just the dashboard, never interactive
+    waypoints list                       # every item, ONE LINE each, grouped by verdict
+    waypoints list --verbose             # ...plus bullets, gate reasons, dates, priorities
+    waypoints list --json                # documented machine-readable contract (see list_payload)
+    waypoints list --gated|--waiting|--actionable|--untriaged   # symmetric views; --open drops done
+    waypoints list [--limit N] [--page N] [--max-chars N] [--all]   # paging, see below
+    waypoints list --repo NAME          # only one repo's items (composes with the views/--open)
+    waypoints list --since YYYY-MM-DD | --age Nd   # only items CREATED in that window
+                                        # (composes with everything; --age rides the
+                                        # WAYPOINTS_TODAY clock; search takes them too)
+    waypoints resolve                    # release waiting items whose target has landed
+    waypoints config get [key]           # banner settings + where each comes from
+    waypoints config set <key> <value>   # banner-items N | banner-pinned N | pin-lines N|full
+    waypoints config unset <key>         # back to the default (env var > file > default)
+    waypoints triage <id> --tier do-now|heavy|gated|waiting
+                        [--gate-reason "…"] [--waiting-on "<item-id> @ <milestone>"] [--clear]
+    waypoints add "Title" [--point "…" ...] [--detail ...] [--surface-on YYYY-MM-DD]
+                        [--repo NAME ...]        # repo(s) this item belongs to (repeatable)
+    waypoints edit <id> [--title …] [--add-point "…" ...] [--clear-summary] [--detail …]
+                                         # --point/--add-point both APPEND; --replace-points discards
+                        [--surface-on YYYY-MM-DD] [--clear-surface-on]
+                        [--repo NAME ...] [--clear-repo]
+                                         # --repo APPENDS and dedupes (re-adding is a no-op);
+                                         # --clear-repo removes the category; they conflict
+    waypoints show <id>                  # print title + summary + full detail (the "pick it up" view)
+    waypoints search "kw" [--all|--archived] [--case] [--regex] [--ids-only] [--repo NAME]
+                                         # find items by keyword across title, bullets AND detail.
+                                         # Use this instead of `list | grep`: the list view
+                                         # TRUNCATES, so a grep over it silently misses matches
+                                         # past the ellipsis and reads as a genuine absence.
+    waypoints done <id> [--as "resolution"]  # mark done; --as rewrites the title to the outcome
+                                             # (use it when the title reads as an open question)
+    waypoints reopen <id>                # undo done (inverse of `done`); AUTO-RESTORES an
+                                         # archived item first — no separate `restore` needed
+    waypoints restore <id>               # bring an archived item back to the live store (still done)
+    waypoints rm <id>                    # remove an item from the LIVE store, archiving it (recoverable)
+                                         # --delete --confirm = the obscure two-step, archive-only
+    waypoints archive list               # the closed-item paper trail
+    waypoints archive show <id>          # full record of an archived item
+    waypoints journal [--id <id>] [--since YYYY-MM-DD]
+                                         # the mutation history: which command changed what,
+                                         # when. Append-only and never pruned
+    waypoints toggle <id>                # flip an item's done state
+    waypoints priority <id> <level>      # set banner priority (int; higher shows earlier)
+    waypoints pin <id> --because "…"     # 'heavy, but do it NOW anyway' — outranks the tier
+                                         # order, which priority cannot do. Reason required.
+    waypoints unpin <id>                 # drop the override; the tier order applies again
+    waypoints reorder <id> <position>    # move an item to a 0-based position in the list
+    waypoints prune                      # MOVE all done items to the archive (nothing is destroyed)
+    waypoints recover [--list] [--from <backup>] [--yes]
+                                         # FILE-LEVEL repair when the store itself is unreadable:
+                                         # puts the newest backup that actually PARSES back in
+                                         # place, journals the event, and keeps the replaced file
+
+Item lifecycle: open -> done (live store, hidden from the banner) -> archived (a separate file,
+still readable/restorable) -> deleted (gone; only via rm --delete --confirm, from the archive,
+by exact id). The closed trail is a deliberate record of how things resolved, so nothing that
+runs routinely destroys it.
+
+Tiers: `title` (banner headline) + `summary` (short bullets, shown in banner via --point) +
+`detail` (full continuity dump, NOT in the banner — read on demand with `show`).
+
+Output size is a first-class concern, not a nicety. Claude Code shows roughly 30,000 characters
+of a command's output inline and saves the rest to a file, and the pre-0.6.0 verbose render of a
+real ~150-item store was ~32.5 KB — so the tail silently stopped being readable in place. Hence:
+`list` is title-only by default (~19.6 KB for the same store), everything it moved is still there
+behind `--verbose` and `show`, and pages are bounded by output size as well as item count. The
+size of a candidate page is MEASURED by rendering it, never estimated, and counted in UTF-8 bytes
+because bytes >= characters and the ceiling's unit cannot be verified from here. Two guarantees
+hold at every budget: no item is ever unreachable by paginating (a page always carries at least
+one whole item), and a page that cannot honour its budget SAYS so instead of overshooting quietly.
+
+The `waiting` tier is blocked-on-another-item-in-this-store. It is a real tier rather than a
+prefix inside `gated` for one reason: the target is an id this store holds, so the store can
+re-check it for free and release the item itself. `--waiting-on` therefore REQUIRES a milestone
+("<item-id> @ <milestone>"), because "when that item is done" is frequently not the trigger. It is
+REPEATABLE: an item may wait on several others, and then it releases only when ALL of them have
+landed, while a single missing target makes the whole spec stale rather than partly satisfied.
+Closing a target auto-releases its dependents to UNTRIAGED — never to a guessed weight, since
+their own weight was never assessed while they waited.
+
+Three records, three jobs — do not reach for the wrong one:
+  `journal`      every mutation, permanent. Answers "where did this go wrong".
+  `archive list` closed items, human-readable. Answers "how did this resolve".
+  the backup dir a bounded ring of whole-file snapshots. Answers "put it back".
+
+Store path: ~/.claude/waypoints.json (override with $WAYPOINTS_FILE); the archive, the journal
+and the backup dir are all derived from it, so one env var redirects the whole family.
+"""
+import argparse
+import json
+import os
+import re
+import shlex
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import waypoints_core as c
+import waypoints_menu as menu
+
+
+JOURNAL_ARGV_TOKEN_MAX = 60
+
+
+def _journal_argv_token(arg):
+    """One argv token, shortened FOR DISPLAY only — the raw token stays in the file.
+
+    A `--detail` value is routinely a multi-paragraph dump, and printing it verbatim turns the
+    one-line-per-entry layout (the thing that makes the history scannable) into pages of prose
+    with the timestamps buried. Newlines are collapsed first, because a single embedded newline
+    is enough to break the format regardless of length.
+    """
+    s = " ".join(str(arg).split())
+    if len(s) > JOURNAL_ARGV_TOKEN_MAX:
+        s = s[:JOURNAL_ARGV_TOKEN_MAX - 1].rstrip() + "…"
+    return s
+
+
+def _journal_change_line(ch):
+    """One change, as a line. Shows WHICH FIELDS moved rather than dumping both item dicts —
+    the raw before/after stay in the file for a reader that wants them, but an unsummarised
+    dump per change makes the common case (scan for the command that broke something)
+    unreadable, which would defeat the point of having the record."""
+    item_id = ch.get("id")
+    was, now = ch.get("before"), ch.get("after")
+    if was is None and now is not None:
+        return f"+ {item_id}: added"
+    if now is None and was is not None:
+        return f"- {item_id}: removed"
+    if ch.get("moved"):
+        a, b = ch["moved"]
+        return f"~ {item_id}: moved {a} -> {b}"
+    fields = sorted(set(was or {}) | set(now or {}))
+    changed = [f for f in fields if (was or {}).get(f) != (now or {}).get(f)]
+    return f"~ {item_id}: {', '.join(changed) or 'no field change'}"
+
+
+# ---------------------------------------------------------------------------------------
+# Compact rendering (0.6.0). The default `list` is TITLE-ONLY, one line per item wherever
+# possible, because the verbose form crossed Claude Code's inline-output ceiling: at ~112
+# open items the full render was ~33 KB against a fixed ~30 KB boundary, so the tail became
+# a saved file rather than something you could read in place. Bullets, gate reasons, dates
+# and priorities all still exist -- behind --verbose and `show` -- so nothing is hidden,
+# only moved off the default path.
+# ---------------------------------------------------------------------------------------
+
+# Claude Code returns roughly 30,000 characters of a successful command's output inline
+# before switching to a preview plus a saved file path. Sit just under it by default.
+MAX_CHARS_DEFAULT = 26000
+
+# A page is bounded by BOTH a character budget and an item count, whichever binds first. The
+# character budget is the one that matters: title lengths vary a lot, so a fixed item count
+# either wastes most of the window or overshoots it.
+#
+# The trailing chrome is not a guessed constant -- see _footer_reserve, which BUILDS the real
+# footer strings and measures them. A guessed reserve was wrong twice: too small by the section
+# headers, then too small by a long `Next:` command echoing every option in force.
+FOOTER_RESERVE_FALLBACK = 420
+
+TITLE_MAX = 96
+
+_SECTION_TITLES = {
+    "pinned": "  📌 PINNED (user override — run these before the do-now pile, whatever their tier)",
+    "actionable": "  ACTIONABLE",
+    "waiting": "  WAITING (releases itself when its target lands)",
+    "gated": "  GATED (needs you)",
+    "untriaged": "  UNTRIAGED (no verdict yet — not the same as unblocked)",
+    "done": "  DONE",
+}
+
+# PINNED sits above everything, because that is exactly what a pin asserts: it outranks the
+# tier order. It is a DISPLAY section lifted out of the tiers, not a fifth tier — partition()
+# stays four-way and its sum invariant is untouched (see split_pinned).
+_SECTION_ORDER = ("pinned", "actionable", "waiting", "gated", "untriaged", "done")
+
+
+def _trim(text, cap=TITLE_MAX):
+    s = " ".join(str(text or "").split())
+    return s if len(s) <= cap else s[:cap - 1].rstrip() + "…"
+
+
+def _sections(sel, c):
+    """(section, members) in reading order, store order preserved inside each section."""
+    done = [i for i in sel if i.get("done")]
+    openish = [i for i in sel if not i.get("done")]
+    pinned, openish = c.split_pinned(openish)
+    g = c.partition(openish)
+    groups = {"pinned": pinned, "actionable": g["actionable"], "waiting": g["waiting"],
+              "gated": g["gated"], "untriaged": g["untriaged"], "done": done}
+    return [(name, groups[name]) for name in _SECTION_ORDER if groups[name]]
+
+
+def _item_lines(i, surf, verbose, items, arch, c):
+    """One item's lines. Compact is a single line; --verbose restores everything."""
+    if i.get("done"):
+        flag = "✓"
+    elif c.is_pinned(i):
+        flag = "📌"
+    elif c.is_waiting(i):
+        flag = "⏳"
+    elif c.is_gated(i):
+        flag = "⛔"
+    else:
+        flag = "▶" if i["id"] in surf else "·"
+    title = i.get("title", "") if verbose else _trim(i.get("title", ""))
+    head = f"  {flag} [{i['id']}] {title}"
+    if c.is_waiting(i):
+        status, target, milestone = c.waiting_status(i, items, arch)
+        arrow = c.waiting_on_str(i) or "(unparseable)"
+        if status == c.WAITING_STALE:
+            head += f"   ← ⚠️ {_trim(arrow, 60)} (no such target: {target or '?'})"
+        else:
+            head += f"   ← {_trim(arrow, 70)}"
+    if not verbose:
+        return [head]
+    lines = [head]
+    extra = []
+    if i.get("tier"):
+        extra.append(f"[{i['tier']}]")
+    if i.get("surface_on"):
+        extra.append(f"surface_on={i['surface_on']}")
+    if i.get("priority"):
+        extra.append(f"priority={i['priority']}")
+    if extra:
+        lines[0] = f"  {flag} [{i['id']}] {title} " + " ".join(extra)
+    for b in (i.get("summary") or []):
+        lines.append(f"      - {_trim(b, 200)}")
+    if i.get("gate_reason"):
+        lines.append(f"      gated: {i['gate_reason']}")
+    if c.is_pinned(i):
+        lines.append(f"      pinned: {i.get('pin_reason') or 'no reason recorded'}")
+    return lines
+
+
+def _page_size(blocks):
+    """A page's real size, in UTF-8 BYTES, obtained by rendering it.
+
+    MEASURED, never predicted. An estimate of this got it wrong twice in one sitting: first by
+    omitting the section-header and footer cost, then by a one-character drift -- and an estimate
+    that is 1 over is still a page that breaches the ceiling it exists to respect. Rendering the
+    candidate page is O(items squared) in principle and free in practice at this scale.
+
+    Bytes rather than characters because the ceiling's unit is not something this code can
+    verify, and bytes >= characters always: a byte-safe page is therefore safe under either
+    reading, whereas a character-safe page is NOT (these titles are full of multi-byte —, ←, ⏳,
+    which ran ~1.3% over a 26000 budget when counted as bytes). The cost of the conservative
+    choice is a slightly under-filled page; the cost of the other is a silent breach.
+
+    Every header is rendered as `(continued)` here so the measurement is the worst case for the
+    page regardless of where it lands in the sequence."""
+    return len(_render_page(blocks, set(_SECTION_TITLES)).encode("utf-8"))
+
+
+def _footer_reserve(args, with_counts):
+    """Exactly how much room the trailing chrome needs, in UTF-8 bytes.
+
+    Built from the real strings rather than estimated. The `Next:` line echoes every option in
+    force, so its length varies with the invocation -- which is precisely how a fixed reserve
+    ends up too small on the long invocations and only there, making the breach look random."""
+    parts = ["\n  Showing 000000-000000 of 000000.",
+             "  Next: " + _next_page_cmd(args, 999999)]
+    if with_counts:
+        parts.append("\n  open: 000000 — 000000 actionable · 000000 waiting · 000000 gated · "
+                     "000000 untriaged")
+        parts.append("  (views: --actionable / --waiting / --gated / --untriaged"
+                     " · --verbose for bullets, reasons and dates)")
+        parts.append("  ⚠️  000000 waiting item(s) point at a target that does not exist — "
+                     "run `waypoints resolve` to see which.")
+    return len("\n".join(parts).encode("utf-8"))
+
+
+def _paginate_sections(blocks, limit, max_chars, page, reserve=FOOTER_RESERVE_FALLBACK):
+    """Slice (section, lines) blocks into pages by item count AND output budget.
+
+    A block always lands whole, so one item is never split across a page boundary; and a
+    single oversized block is still emitted alone, so no item can become unreachable by
+    paginating. Returns (page_blocks, start_index, has_more, total)."""
+    budget = max(1, max_chars - reserve) if max_chars else 0
+    pages, cur = [], []
+    for b in blocks:
+        if limit and len(cur) >= limit:
+            pages.append(cur)
+            cur = []
+        elif budget and cur and _page_size(cur + [b]) > budget:
+            pages.append(cur)
+            cur = []
+        cur.append(b)
+    if cur or not pages:
+        pages.append(cur)
+    idx = page - 1
+    total = sum(len(p) for p in pages)
+    if idx < 0 or idx >= len(pages):
+        return [], total, False, total
+    start = sum(len(p) for p in pages[:idx])
+    return pages[idx], start, idx + 1 < len(pages), total
+
+
+def _render_page(shown, seen_before):
+    """Section headers, emitted when the section changes. A section already partly shown on an
+    earlier page is marked `(continued)` so a page is never mistaken for the whole group."""
+    out, current = [], None
+    for section, lines in shown:
+        if section != current:
+            title = _SECTION_TITLES[section]
+            if section in seen_before:
+                title += "  (continued)"
+            out.append(title if not out else "\n" + title)
+            current = section
+        out.extend(lines)
+    return "\n".join(out)
+
+
+def _next_page_cmd(args, page):
+    """The exact command for the next page, echoing the options in force."""
+    parts = ["waypoints", "list"]
+    for flag in ("gated", "waiting", "actionable", "untriaged", "open", "verbose"):
+        if getattr(args, flag, False):
+            parts.append("--" + flag)
+    if getattr(args, "repo", None):
+        # Quoted: a repo name may contain spaces (legal), and the echoed command has to be
+        # re-runnable as printed — unquoted, the name would split into two tokens.
+        parts.append(f"--repo {shlex.quote(args.repo)}")
+    if args.limit:
+        parts.append(f"--limit {args.limit}")
+    if args.max_chars != MAX_CHARS_DEFAULT:
+        parts.append(f"--max-chars {args.max_chars}")
+    parts.append(f"--page {page}")
+    return " ".join(parts)
+
+
+DASHBOARD_TOP = 5
+
+
+def _dashboard(store, items, show_commands=True):
+    """`waypoints` with no arguments: a concise orientation, not the whole inventory.
+
+    The bare command used to be an error (the subparser was required), which meant the most
+    natural thing to type taught you nothing. It must stay SMALL -- if it grew into the full
+    list it would hit the same inline ceiling that made the compact list necessary."""
+    openish = [i for i in items if not i.get("done")]
+    if not items:
+        print("(no waypoints yet)   add one:  waypoints add \"Title\" --point \"key point\"")
+        return 0
+    g = c.partition(openish)
+    today = c.today()
+    surf = {i["id"] for i in c.surfaceable(items, today)}
+    print(f"{len(openish)} open — {len(g['actionable'])} actionable · {len(g['waiting'])} waiting"
+          f" · {len(g['gated'])} gated · {len(g['untriaged'])} untriaged")
+
+    ranked = sorted((i for i in openish if not c.is_gated(i)),
+                    key=lambda i: -i.get("priority", 0))[:DASHBOARD_TOP]
+    if ranked:
+        print("\nHighest priority:")
+        arch = c.load_archive()["items"]
+        for i in ranked:
+            mark = "⏳" if c.is_waiting(i) else ("⛔" if c.is_gated(i)
+                                                else ("▶" if i["id"] in surf else "·"))
+            line = f"  {mark} [{i['id']}] {_trim(i.get('title', ''), 72)}"
+            if c.is_waiting(i):
+                line += f"   ← {_trim(c.waiting_on_str(i), 48)}"
+            print(line)
+    if g["gated"]:
+        print(f"\n{len(g['gated'])} gated item(s) need something from you: waypoints list --gated")
+    if not show_commands:
+        # The selector is about to print the same commands as a numbered menu, so listing them
+        # here first would say everything twice and push the actual prompt off the screen. The
+        # hint block exists for the case where there is nothing interactive to follow it.
+        return 0
+    print("\nCommands:")
+    print("  waypoints list                 every item, one line each")
+    print("  waypoints list --waiting       what is blocked on another item")
+    print("  waypoints show ID              the full detail of one item")
+    print("  waypoints resolve              release waiting items whose target landed")
+    print("  waypoints --help               everything else")
+    return 0
+
+
+def _config(args):
+    """`config get|set|unset` — the banner settings. Errors exit 2 naming the setting; an
+    invalid env var or file value is reported, never papered over with the default."""
+    try:
+        if args.config_cmd == "set":
+            v = c.set_setting(args.key, args.value)
+            print(f"{args.key} = {c.setting_display(args.key, v)}  (saved to {c.settings_path()})")
+            env = c.SETTINGS[args.key][0]
+            if os.environ.get(env):
+                print(f"  note: ${env} is set and overrides the file until it is unset.")
+            return 0
+        if args.config_cmd == "unset":
+            c.unset_setting(args.key)
+            print(f"{args.key} removed from {c.settings_path()} — the default applies "
+                  f"unless ${c.SETTINGS[args.key][0]} is set.")
+            return 0
+        keys = [args.key] if args.key else list(c.SETTINGS)
+        for k in keys:
+            v, src = c.get_setting(k)
+            print(f"  {k:<14} {c.setting_display(k, v):<6} ({src})  — {c.SETTINGS[k][3]}")
+        if not args.key:
+            print(f"\n  file: {c.settings_path()}   change: waypoints.py config set <key> <value>")
+        return 0
+    except c.SettingError as e:
+        print(f"waypoints config: {e}", file=sys.stderr)
+        return 2
+
+
+def _recover(args):
+    """File-level recovery from a backup — the sanctioned alternative to `cp`.
+
+    Runs BEFORE the store is parsed (it is the command for when parsing fails), and journals
+    the event, so "the store went backwards" is visible in the store's own history instead of
+    being an untraceable file swap.
+    """
+    store = c.store_path()
+    cands = c.valid_backups(store)
+    if args.list_backups:
+        if not cands:
+            print("no valid backup found in %s" % c.backup_dir(store))
+            return 1
+        print("backups that parse, newest first (the first one is what a bare `recover` uses):")
+        for i, (path, n) in enumerate(cands):
+            print("  %s %s  (%d item%s)" % ("▶" if i == 0 else " ", path, n,
+                                            "" if n == 1 else "s"))
+        return 0
+
+    readable = None
+    try:
+        readable = c.load_store(store)
+    except c.StoreCorrupt:
+        pass
+    if readable is not None and not args.yes:
+        # The dangerous case is not the broken store — it is recovering over a WORKING one,
+        # which throws away every change made since the snapshot. Gate that, not the repair.
+        print("the current store is READABLE (%d item%s). Recovering would replace it with a "
+              "snapshot and lose anything newer.\nRe-run with --yes if that is really what you "
+              "want, or `waypoints.py recover --list` to look first."
+              % (len(readable["items"]), "" if len(readable["items"]) == 1 else "s"),
+              file=sys.stderr)
+        return 2
+
+    try:
+        used, n, quarantined = c.recover_store(args.from_backup, store,
+                                               argv=["recover"] + (["--from", args.from_backup]
+                                                                   if args.from_backup else []))
+    except FileNotFoundError as e:
+        print("cannot recover: %s" % e, file=sys.stderr)
+        return 1
+    except Exception as e:
+        print("cannot recover from %s: %s" % (args.from_backup, e), file=sys.stderr)
+        return 1
+    print("recovered %d item%s from %s" % (n, "" if n == 1 else "s", used))
+    if quarantined:
+        print("the replaced file was kept at %s (outside the rotating ring)" % quarantined)
+    print("journalled — `waypoints.py journal` now shows this recovery.")
+    return 0
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="waypoints", description="Manage waypoints reminders.")
+    # NOT required: a bare `waypoints` is the dashboard. The most natural thing to type used
+    # to be an argparse error, which taught the reader nothing.
+    sub = p.add_subparsers(dest="cmd", required=False)
+    sub.add_parser("dashboard", help="the concise orientation shown by a bare `waypoints`")
+    sub.add_parser("menu", help="the interactive command selector ""(also offered by a bare `waypoints` on a terminal)")
+    sub.add_parser("resolve", help="release waiting items whose target has landed; "
+                                   "report waiting targets that do not exist")
+    pl = sub.add_parser("list", help="list all items")
+    pl.add_argument("--json", action="store_true",
+                    help="emit the documented machine-readable contract instead of text")
+    # Symmetric views, equal citizens: none is the default and none implies the others are
+    # someone else's problem. Untriaged is its own view because an unassessed item is not
+    # thereby actionable, and it must be findable rather than falling between the two.
+    view = pl.add_mutually_exclusive_group()
+    view.add_argument("--gated", action="store_true", help="only items whose verdict is gated")
+    view.add_argument("--actionable", action="store_true",
+                      help="only items whose verdict is do-now or heavy")
+    view.add_argument("--waiting", action="store_true",
+                      help="only items blocked on ANOTHER ITEM in this store reaching a milestone")
+    view.add_argument("--untriaged", action="store_true", help="only items with no verdict yet")
+    pl.add_argument("--open", action="store_true", help="exclude items already done")
+    pl.add_argument("--verbose", action="store_true",
+                    help="restore summary bullets, gate reasons, dates and priorities "
+                         "(the default is title-only, one line per item)")
+    pl.add_argument("--limit", type=int, default=0, metavar="N",
+                    help="at most N items per page (0 = no item limit)")
+    pl.add_argument("--page", type=int, default=1, metavar="N", help="which page to show (1-based)")
+    pl.add_argument("--max-chars", type=int, default=MAX_CHARS_DEFAULT, metavar="N",
+                    help=f"end a page before its output exceeds N (default {MAX_CHARS_DEFAULT}; "
+                         f"0 disables), bounding it to what Claude Code shows inline. Counted in "
+                         f"UTF-8 BYTES, the conservative reading — these titles carry multi-byte "
+                         f"characters, so a byte-safe page is safe either way")
+    pl.add_argument("--all", action="store_true",
+                    help="no item and no character limit — for an ordinary terminal or a "
+                         "redirection, not the inline view")
+    pl.add_argument("--repo", default=None, metavar="NAME",
+                    help="only items belonging to this repo (matches ANY element of the "
+                         "item's repos; composes with the views and --open)")
+    pl.add_argument("--since", default=None, metavar="YYYY-MM-DD",
+                    help="only items CREATED on or after this date (composes with the "
+                         "views, --open and --repo; done items stay hidden without --all, "
+                         "as always)")
+    pl.add_argument("--age", default=None, metavar="Nd",
+                    help="only items CREATED within the last N days — shorthand for "
+                         "--since (today minus N days, on the WAYPOINTS_TODAY-overridable "
+                         "clock); mutually exclusive with --since")
+    pa = sub.add_parser("add", help="add an open item")
+    pa.add_argument("title")
+    pa.add_argument("--point", action="append", default=None,
+                    help="a short summary bullet shown in the banner (repeatable)")
+    pa.add_argument("--add-point", action="append", default=None, metavar="POINT",
+                    help="alias of --point (a new item has no bullets to lose); accepted so the "
+                         "safe verb works the same on add and edit")
+    pa.add_argument("--detail", default="")
+    pa.add_argument("--surface-on", default=None,
+                    help="earliest date to surface (YYYY-MM-DD); NOT an expiry — persists until done")
+    pa.add_argument("--id", default=None, metavar="SLUG",
+                    help="use this kebab-case id instead of one slugged from the title, so "
+                         "cross-references can be written before the item exists; refused if "
+                         "any open or archived item already has it")
+    pa.add_argument("--repo", action="append", default=None, metavar="NAME",
+                    help="repo this item belongs to: the bare directory name of its checkout "
+                         "(repeatable). Malformed values are REFUSED, not repaired")
+
+    pe = sub.add_parser("edit", help="update an existing item in place (id + created stay fixed)")
+    pe.add_argument("id")
+    pe.add_argument("--title", default=None, help="new title (does NOT change the id)")
+    pe.add_argument("--point", action="append", default=None,
+                    help="append a summary bullet, KEEPING the existing ones (repeatable). "
+                         "Identical to --add-point: the obvious name is the SAFE one")
+    pe.add_argument("--add-point", action="append", default=None, metavar="POINT",
+                    help="append a summary bullet (alias of --point, kept for existing habits "
+                         "and scripts)")
+    pe.add_argument("--replace-points", action="store_true",
+                    help="DESTRUCTIVE: discard every existing bullet and use only the ones given "
+                         "here. Must be passed explicitly; the discarded text is echoed first")
+    pe.add_argument("--rm-point", default=None, metavar="N",
+                    help="remove bullet N (1-based, as shown by `show`) without touching the rest")
+    pe.add_argument("--set-point", nargs=2, default=None, metavar=("N", "TEXT"),
+                    help="rewrite bullet N (1-based) in place, e.g. to fix a typo")
+    pe.add_argument("--clear-summary", action="store_true", help="remove all summary bullets")
+    pe.add_argument("--detail", default=None, help="new detail; pass \"\" to clear it")
+    pe.add_argument("--surface-on", default=None, help="set the earliest-surface date (YYYY-MM-DD)")
+    pe.add_argument("--clear-surface-on", action="store_true", help="remove the surface-on date")
+    pe.add_argument("--repo", action="append", default=None, metavar="NAME",
+                    help="append a repo this item belongs to (repeatable). Deduped: re-adding "
+                         "a repo the item already has is a no-op. Malformed values are "
+                         "REFUSED, not repaired")
+    pe.add_argument("--clear-repo", action="store_true",
+                    help="remove the repo category entirely (cannot be combined with --repo)")
+
+    ps = sub.add_parser("show", help="print an item's full detail (the pick-it-up view)")
+    ps.add_argument("id")
+
+    pf = sub.add_parser("search", help="find items by keyword across title, bullets and detail")
+    pf.add_argument("query", help="substring to look for (case-insensitive by default)")
+    pf.add_argument("--archived", action="store_true",
+                    help="search the ARCHIVE instead of the live store — 'was this ever tracked?'")
+    pf.add_argument("--all", action="store_true",
+                    help="search the live store AND the archive")
+    pf.add_argument("--case", action="store_true", help="case-sensitive match")
+    pf.add_argument("--regex", action="store_true",
+                    help="treat the query as a regular expression instead of a substring")
+    pf.add_argument("--ids-only", action="store_true",
+                    help="print only matching ids, one per line (for scripting)")
+    pf.add_argument("--repo", default=None, metavar="NAME",
+                    help="only items belonging to this repo (matches ANY element of the "
+                         "item's repos)")
+    pf.add_argument("--since", default=None, metavar="YYYY-MM-DD",
+                    help="only matches CREATED on or after this date")
+    pf.add_argument("--age", default=None, metavar="Nd",
+                    help="only matches CREATED within the last N days; mutually "
+                         "exclusive with --since")
+
+    pd = sub.add_parser("done", help="mark an item done by id")
+    pd.add_argument("id")
+    pd.add_argument("--as", dest="resolved", default=None, metavar="RESOLUTION",
+                    help="rewrite the title to this resolution phrasing while closing (one call "
+                         "instead of edit+done); use it when the title reads as an open question")
+    pd.add_argument("--evidence", default=None, metavar="TEXT",
+                    help="REQUIRED to close: what was achieved and why this is done, pointing at "
+                         "something concrete (commit sha, file:line, version/tag, test count, or a "
+                         "command + its result). Recorded as a bullet so the archive says WHY it "
+                         "closed. An off-hand comment with no reference is refused")
+    pd.add_argument("--no-evidence", default=None, metavar="REASON",
+                    help="close WITHOUT evidence of work, giving the reason instead (duplicate, "
+                         "superseded, obsolete, mistake). The reason is recorded")
+
+    pr = sub.add_parser("reopen", help="undo done on an item by id (inverse of `done`)")
+    pr.add_argument("id")
+
+    pres = sub.add_parser("restore", help="bring an archived item back to the live store (stays done)")
+    pres.add_argument("id")
+
+    prm = sub.add_parser("rm", help="remove an item from the live store, archiving it (recoverable)")
+    prm.add_argument("id")
+    prm.add_argument("--delete", action="store_true",
+                     help="permanent deletion — only valid for an item that is ALREADY archived "
+                          "(never removes from the live store)")
+    prm.add_argument("--confirm", action="store_true",
+                     help="required together with --delete to actually delete (fail-closed without it)")
+
+    parc = sub.add_parser("archive", help="read the archived (closed) item trail")
+    parc_sub = parc.add_subparsers(dest="archive_cmd", required=True)
+    parl = parc_sub.add_parser("list", help="list archived items")
+    parl.add_argument("--json", action="store_true",
+                      help="emit the documented machine-readable contract instead of text")
+    parsh = parc_sub.add_parser("show", help="print an archived item's full record")
+    parsh.add_argument("id")
+
+    pt = sub.add_parser("toggle", help="flip an item's done state")
+    pt.add_argument("id")
+
+    pp = sub.add_parser("priority", help="set an item's banner priority (higher sorts earlier)")
+    pp.add_argument("id")
+    pp.add_argument("level", type=int, help="integer priority; higher = shown earlier. 0 is default")
+
+    pro = sub.add_parser("reorder", help="move an item to a specific 0-based position in the list")
+    pro.add_argument("id")
+    pro.add_argument("position", type=int)
+
+    pv = sub.add_parser("triage", help="record how an item can be picked up (tier + gate reason)")
+    pv.add_argument("id")
+    pv.add_argument("--tier", choices=c.TIERS, default=None,
+                    help="do-now (bounded) | heavy (may sprawl) | gated (needs something first)")
+    pv.add_argument("--waiting-on", action="append", default=None,
+                    metavar="'<item-id> @ <milestone>'",
+                    help="required for --tier waiting: the item this one waits on AND the "
+                         "milestone that releases it. The milestone is not optional — "
+                         "\"when that item is done\" is often not the actual trigger. "
+                         "REPEATABLE: an item can wait on several others, and then it releases "
+                         "only when ALL of them have landed")
+    pv.add_argument("--gate-reason", default=None,
+                    help="what this item is waiting on (only valid with --tier gated)")
+    pv.add_argument("--clear", action="store_true",
+                    help="remove the verdict entirely, back to untriaged")
+
+    pj = sub.add_parser("journal", help="the append-only mutation history (which command changed what)")
+    pj.add_argument("--id", default=None, help="only entries that touched this item id")
+    pj.add_argument("--since", default=None,
+                    help="only entries at or after this YYYY-MM-DD (or a full ISO stamp)")
+
+    sub.add_parser("prune", help="move all done items to the archive (nothing is destroyed)")
+
+    ppin = sub.add_parser("pin", help="mark an item 'do this now whatever its tier' (records why)")
+    ppin.add_argument("id")
+    ppin.add_argument("--because", default=None,
+                      help="REQUIRED: why this outranks the tier order. A pin overrules an "
+                           "honest verdict, so an unexplained one is indistinguishable from a "
+                           "mistake a month later")
+    pun = sub.add_parser("unpin", help="remove a pin (the tier order applies again)")
+    pun.add_argument("id")
+
+    prc = sub.add_parser("recover", help="put the newest VALID backup back in place of an "
+                                         "unreadable store (journalled)")
+    prc.add_argument("--list", action="store_true", dest="list_backups",
+                     help="show the backups that parse, newest first, and change nothing")
+    prc.add_argument("--from", dest="from_backup", default=None,
+                     help="recover from THIS backup instead of the newest valid one")
+    prc.add_argument("--yes", action="store_true",
+                     help="skip the confirmation when the current store is READABLE "
+                          "(recovering over a readable store replaces live data)")
+    pcfg = sub.add_parser("config", help="show or change the banner settings "
+                                         "(env var > settings file > default)")
+    pcfg_sub = pcfg.add_subparsers(dest="config_cmd", required=True)
+    pcg = pcfg_sub.add_parser("get", help="show each setting, its value and where it comes from")
+    pcg.add_argument("key", nargs="?", choices=list(c.SETTINGS))
+    pcs = pcfg_sub.add_parser("set", help="persist a setting in the settings file")
+    pcs.add_argument("key", choices=list(c.SETTINGS))
+    pcs.add_argument("value")
+    pcu = pcfg_sub.add_parser("unset", help="drop a setting from the file (back to the default)")
+    pcu.add_argument("key", choices=list(c.SETTINGS))
+    args = p.parse_args(argv)
+
+    # --since/--age (list + search): resolve once, loud failure on malformed values.
+    # getattr: the flags exist only on those two subparsers.
+    try:
+        _since = c.resolve_since(getattr(args, "since", None), getattr(args, "age", None))
+    except ValueError as e:
+        p.error(str(e))
+
+    if args.cmd == "recover":
+        return _recover(args)
+
+    if args.cmd == "config":  # needs no store, so it works even when the store is damaged
+        return _config(args)
+
+    try:
+        store = c.load_store()
+    except c.StoreCorrupt as e:
+        # REFUSE. Pre-0.7.0 this read as an empty store, and the next write made that emptiness
+        # canonical — data loss by default. `journal` and `recover` are the two commands that
+        # must still work here, and neither needs the store parsed.
+        print(e.report(), file=sys.stderr)
+        if args.cmd == "journal":
+            print("\n(reading the journal anyway — it is a separate append-only file)\n",
+                  file=sys.stderr)
+            store = {"version": c.VERSION, "items": []}
+        else:
+            return 2
+    items = store["items"]
+
+    if args.cmd is None or args.cmd in ("dashboard", "menu"):
+        # The dashboard prints FIRST in both cases, then the selector opens if it may. The
+        # dashboard is the context you need in order to choose an action, so replacing it with a
+        # bare menu would trade orientation for convenience; showing both costs a few lines.
+        #
+        # `dashboard` stays non-interactive forever -- it is the explicit way to ask for just the
+        # summary, and the escape hatch for a terminal that does not want the prompt. A bare
+        # `waypoints` opens the selector only on a real TTY, so a pipe, a script or a hook is
+        # unaffected: blocking those on input that never arrives would be a far worse regression
+        # than the missing convenience. `menu` forces it and says so when it cannot.
+        opening_menu = args.cmd != "dashboard" and menu.available()
+        rc = _dashboard(store, items, show_commands=not opening_menu)
+        if args.cmd == "dashboard":
+            return rc
+        if not menu.available():
+            if args.cmd == "menu":
+                print("\n(the selector needs an interactive terminal — "
+                      "stdin/stdout are not a TTY, or WAYPOINTS_NO_MENU is set)",
+                      file=sys.stderr)
+                return 2
+            return rc
+        return menu.run(dispatch=main)
+
+    if args.cmd == "resolve":
+        arch = c.load_archive()["items"]
+        promoted = c.promote_landed_waiting(items, arch)
+        stale = c.stale_waiting(items, arch)
+        if promoted:
+            c.save_store(store)
+            print(f"released {len(promoted)} waiting item(s) — each is now UNTRIAGED on purpose, "
+                  f"because its own weight was never assessed while it waited:")
+            for it, target, milestone in promoted:
+                print(f"  ⏵ [{it['id']}] {it['title']}")
+                print(f"      landed: {target} @ {milestone}")
+        else:
+            print("nothing released: no waiting item's target has landed.")
+        if stale:
+            print(f"\n  ⚠️  {len(stale)} waiting item(s) point at a target that does not exist. "
+                  f"Not repaired — the store cannot know whether the target was renamed or the "
+                  f"dependency was mistyped:")
+            for it, target in stale:
+                print(f"      [{it['id']}] -> {target or '(unparseable)'}"
+                      f"   (full spec: {c.waiting_on_str(it) or 'none'})")
+        return 0
+
+    if args.cmd == "list":
+        view = ("gated" if args.gated else "actionable" if args.actionable
+                else "waiting" if args.waiting
+                else "untriaged" if args.untriaged else None)
+        sel = items
+        if args.open or view:
+            sel = [i for i in sel if not i.get("done")]
+        if view == "gated":
+            sel = [i for i in sel if c.is_gated(i)]
+        elif view == "actionable":
+            sel = [i for i in sel if c.is_actionable(i)]
+        elif view == "waiting":
+            sel = [i for i in sel if c.is_waiting(i)]
+        elif view == "untriaged":
+            sel = [i for i in sel if c.is_untriaged(i)]
+        if args.repo:
+            # ANY-element membership, not whole-list equality: an umbrella item lists
+            # several repos and must surface under each of them.
+            sel = [i for i in sel if args.repo in c.repos_of(i)]
+        if _since:
+            sel = [i for i in sel if c.within_since(i, _since)]
+
+        if args.json:
+            # Counts describe the WHOLE store (unfiltered) so a filtered view still tells the
+            # reader what it is a subset of -- a count that silently narrows with the filter is
+            # how a partial view gets mistaken for the total. The same reasoning is why --limit
+            # and --max-chars are IGNORED here: silently paginated JSON is not a contract.
+            payload = c.list_payload(items)
+            if view or args.open or args.repo or _since:
+                keep = {i["id"] for i in sel}
+                payload["items"] = [it for it in payload["items"] if it["id"] in keep]
+                payload["view"] = view or ("open" if args.open else None)
+                # The payload says WHICH filter produced the subset — a repo-filtered
+                # --json that silently returned everything would be the same defect as
+                # pagination dropping the filter, one surface over.
+                if args.repo:
+                    payload["repo"] = args.repo
+                if _since:
+                    payload["since"] = _since
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            return 0
+
+        if not items:
+            print("(no open waypoints)")
+            return 0
+        if not sel:
+            if view:
+                print(f"(no {view} waypoints)" + (f" for repo {args.repo}" if args.repo else ""))
+            elif args.repo:
+                # Name every filter in force: "no waypoints for repo X" would imply the repo
+                # has none at all when they may merely all be done and --open hid them.
+                state = "open " if args.open else ""
+                print(f"(no {state}waypoints for repo {args.repo})")
+            else:
+                print("(nothing to show)")
+            return 0
+        today = c.today()
+        surf = {i["id"] for i in c.surfaceable(items, today)}
+        arch = c.load_archive()["items"]
+
+        # Grouped, in the order a reader acts on them. `waiting` gets its OWN section rather
+        # than being folded into either neighbour: it cannot be started now, but it needs no
+        # human and releases itself, so filing it with the human-gated pile would hide the
+        # dependency cascade. Within a section, store order is preserved, so `reorder` and
+        # `priority` still mean what they meant.
+        blocks = []
+        for section, members in _sections(sel, c):
+            for i in members:
+                blocks.append((section, _item_lines(i, surf, args.verbose, items, arch, c)))
+
+        limit = 0 if args.all else args.limit
+        max_chars = 0 if args.all else args.max_chars
+        shown, start, has_more, total = _paginate_sections(
+            blocks, limit, max_chars, args.page,
+            reserve=_footer_reserve(args, with_counts=view is None))
+        if not shown:
+            print(f"page {args.page} is past the end ({total} item(s) total).")
+            return 0
+
+        # The budget bounds the WHOLE output, so body and chrome are assembled together and
+        # checked ONCE. Checking the body alone was a real bug: a page whose items fit but whose
+        # footer tipped it over reported no breach, so the breach was invisible exactly when it
+        # mattered.
+        seen_before = {sec for sec, _ in blocks[:start]}
+        out = [_render_page(shown, seen_before)]
+
+        if start or has_more:
+            out.append(f"\n  Showing {start + 1}-{start + len(shown)} of {total}.")
+            if has_more:
+                out.append(f"  Next: {_next_page_cmd(args, args.page + 1)}")
+        if view is None:
+            g = c.partition([i for i in items if not i.get("done")])
+            openn = sum(len(v) for v in g.values())
+            out.append(f"\n  open: {openn} — {len(g['actionable'])} actionable · "
+                       f"{len(g['waiting'])} waiting · {len(g['gated'])} gated · "
+                       f"{len(g['untriaged'])} untriaged")
+            out.append("  (views: --actionable / --waiting / --gated / --untriaged"
+                       " · --verbose for bullets, reasons and dates)")
+        # The universe for resolving a target is ALWAYS the whole store, never the current view:
+        # a target outside the filter still exists, and narrowing the universe would report it as
+        # missing. Only the REPORTING is scoped to what is on screen.
+        in_view = {i["id"] for i in sel}
+        stale = [(it, t) for it, t in c.stale_waiting(items, arch) if it["id"] in in_view]
+        if stale:
+            out.append(f"  ⚠️  {len(stale)} waiting item(s) point at a target that does not "
+                       f"exist — run `waypoints resolve` to see which.")
+
+        text = "\n".join(out)
+        if args.max_chars and len(text.encode("utf-8")) > args.max_chars:
+            # A page always carries at least one WHOLE item, so a budget too small to hold one
+            # item plus the chrome cannot be honoured. Ship it and SAY so: a silent overshoot
+            # hides the breach, and dropping the item would make it unreachable by paginating,
+            # which is worse. Stated unconditionally — if this ever fires with more than one item
+            # on the page, that is a paginator bug and the message is how it becomes visible.
+            text += (f"\n  (--max-chars {args.max_chars} could not be honoured for "
+                     f"{'this single item' if len(shown) == 1 else f'these {len(shown)} items'}"
+                     f" — shown anyway rather than dropped.)")
+        print(text)
+        return 0
+
+    if args.cmd == "add":
+        if args.id is not None:
+            if not c.is_valid_id(args.id):
+                print(f"--id must be kebab-case (a-z, 0-9, single dashes): {args.id!r}",
+                      file=sys.stderr)
+                return 2
+            # An archived id stays reserved: `reopen` would otherwise resurrect a duplicate,
+            # and the auto-slug path's silent -2 suffix would defeat a pre-written link.
+            taken = {i.get("id") for i in items} | \
+                    {i.get("id") for i in c.load_archive().get("items") or []}
+            if args.id in taken:
+                print(f"id already in use (open or archived): {args.id}")
+                return 1
+        try:
+            it = c.add_item(items, args.title, detail=args.detail, surface_on=args.surface_on,
+                            id=args.id,
+                            summary=(args.point or []) + (args.add_point or []) or None,
+                            repos=args.repo)
+        except c.RepoError as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 2
+        c.save_store(store)
+        print(f"added [{it['id']}] {it['title']}")
+        return 0
+
+    if args.cmd == "edit":
+        existing = c.get_item(items, args.id)
+        if existing is None:
+            print(f"no such id: {args.id}")
+            return 1
+        old_points = list(existing.get("summary") or [])
+
+        def _echo_discarded(verb):
+            # Print them so they land in the session transcript and stay recoverable.
+            print(f"{verb} {len(old_points)} existing summary bullet(s):")
+            for point in old_points:
+                print(f"    - {point}")
+
+        kwargs = {}
+        if args.title is not None:
+            kwargs["title"] = args.title
+        if args.clear_summary:
+            if args.point or args.add_point or args.rm_point is not None or args.set_point is not None:
+                print("--clear-summary cannot be combined with --point/--add-point/"
+                      "--rm-point/--set-point")
+                return 2
+            if old_points:
+                _echo_discarded("clearing")
+            kwargs["summary"] = []
+        elif args.rm_point is not None or args.set_point is not None:
+            # TARGETED single-bullet edits. These exist so that append-only does not make a
+            # typo permanent: the answer to "one bullet is wrong" must not be "retype them
+            # all". An out-of-range index FAILS LOUDLY -- silently no-opping would look like
+            # success, and silently clamping would edit the wrong bullet.
+            if args.point or args.add_point or args.replace_points:
+                print("--rm-point/--set-point edit one bullet; do not combine them with "
+                      "--point/--add-point/--replace-points")
+                return 2
+            if args.rm_point is not None and args.set_point is not None:
+                print("pass either --rm-point or --set-point, not both")
+                return 2
+            raw = args.rm_point if args.rm_point is not None else args.set_point[0]
+            try:
+                n = int(raw)
+            except ValueError:
+                print(f"bullet number must be an integer (1-based), got {raw!r}")
+                return 2
+            if n < 1 or n > len(old_points):
+                print(f"bullet {n} is out of range on [{args.id}]: it has "
+                      f"{len(old_points)} bullet(s), numbered 1-based.")
+                for i, point in enumerate(old_points, 1):
+                    print(f"    {i}. {point}")
+                return 2
+            new_points = list(old_points)
+            if args.rm_point is not None:
+                print(f"removing bullet {n}: {new_points[n - 1]}")
+                del new_points[n - 1]
+            else:
+                print(f"replacing bullet {n}: {new_points[n - 1]}")
+                new_points[n - 1] = args.set_point[1]
+            kwargs["summary"] = new_points
+        elif args.replace_points:
+            # The ONLY destructive path, and it must be asked for by name.
+            replacement = (args.point or []) + (args.add_point or [])
+            if not replacement:
+                print("--replace-points needs at least one --point to replace them with "
+                      "(use --clear-summary to remove every bullet)")
+                return 2
+            if old_points:
+                _echo_discarded("replacing")
+            kwargs["summary"] = replacement
+        elif args.point or args.add_point:
+            # --point and --add-point are now the SAME append. The old --point REPLACED every
+            # bullet, and guarding that with a refusal still left the destructive operation
+            # holding the name people reach for first -- which is the defect, not the fix.
+            # Combining them is therefore harmless rather than an error.
+            kwargs["summary"] = old_points + list(args.point or []) + list(args.add_point or [])
+        if args.detail is not None:
+            kwargs["detail"] = args.detail
+        if args.clear_surface_on:
+            kwargs["surface_on"] = None
+        elif args.surface_on is not None:
+            kwargs["surface_on"] = args.surface_on
+        if args.clear_repo and args.repo:
+            print("--clear-repo cannot be combined with --repo")
+            return 2
+        if args.clear_repo:
+            kwargs["repos"] = None
+        elif args.repo:
+            try:
+                new_repos = c.normalize_repos(args.repo)
+            except c.RepoError as e:
+                print(f"refused: {e}", file=sys.stderr)
+                return 2
+            # Append like --point, but as a set: the item never lists a repo twice, so the
+            # backfill sweep can safely re-run `edit --repo X`.
+            kwargs["repos"] = c.merge_repos(existing.get("repos"), new_repos)
+        it = c.edit_item(items, args.id, **kwargs)
+        if it is None:
+            print(f"no such id: {args.id}")
+            return 1
+        c.save_store(store)
+        print(f"edited [{it['id']}] {it['title']}")
+        return 0
+
+    if args.cmd == "search":
+        # WHY THIS EXISTS. Asked whether a spinner idea was already tracked, a session ran
+        # `waypoints.py list | grep -i spinner` and concluded it was ABSENT. It had been tracked
+        # for two weeks — but `list` TRUNCATES titles, so the rendered line ended "local-identit…"
+        # and the match was cut off past the ellipsis. A duplicate item was filed as a result.
+        #
+        # Grepping a rendered VIEW is not searching the STORE, and the failure is silent: a
+        # truncating view returns zero hits having examined nothing, which is indistinguishable
+        # from a genuine absence. So this searches the DATA — title, every summary bullet, and the
+        # detail (where continuity dumps live, invisible to every view except `show`) — and prints
+        # matching text UNTRUNCATED, so its own output is safe to grep and safe to trust.
+        if args.regex:
+            try:
+                rx = re.compile(args.query, 0 if args.case else re.I)
+            except re.error as e:
+                print(f"bad --regex: {e}", file=sys.stderr)
+                return 2
+            hit = lambda text: bool(rx.search(text))
+        else:
+            needle = args.query if args.case else args.query.lower()
+            hit = lambda text: needle in (text if args.case else text.lower())
+
+        pools = []
+        if args.archived or args.all:
+            pools.append(("archived", c.load_archive()["items"]))
+        if not args.archived or args.all:
+            pools.insert(0, ("open", items))
+
+        total = 0
+        for where, pool in pools:
+            for it in pool:
+                if args.repo and args.repo not in c.repos_of(it):
+                    continue
+                if _since and not c.within_since(it, _since):
+                    continue
+                fields = []                      # (label, text) for every place a match can hide
+                fields.append(("title", it.get("title") or ""))
+                for b in it.get("summary") or []:
+                    fields.append(("point", b))
+                if it.get("detail"):
+                    fields.append(("detail", it["detail"]))
+                matched = [(lab, txt) for lab, txt in fields if hit(txt)]
+                if not matched:
+                    continue
+                total += 1
+                if args.ids_only:
+                    print(it["id"])
+                    continue
+                state = "done" if it.get("done") else where
+                print(f"[{it['id']}] {it.get('title') or ''}   ({state})")
+                for lab, txt in matched:
+                    if lab == "title":
+                        continue          # already printed in full on the line above
+                    for line in txt.splitlines():
+                        if hit(line):
+                            print(f"    {lab}: {line}")
+        if not args.ids_only:
+            scope = " + ".join(w for w, _ in pools)
+            if args.repo:
+                scope += f" (repo: {args.repo})"
+            if total:
+                print(f"\n{total} item(s) matched {args.query!r} in {scope}")
+            else:
+                # An empty result must not read like a working search that found nothing when the
+                # scope was simply wrong -- the original bug was a false negative, so this names
+                # the scope it actually looked in and the flag that widens it.
+                print(f"no item matched {args.query!r} in {scope}"
+                      + ("" if (args.archived or args.all)
+                         else " — add --archived or --all to include closed items"))
+        return 0 if total else 1
+
+    if args.cmd == "show":
+        it = c.get_item(items, args.id)
+        if it is None:
+            print(f"no such id: {args.id}")
+            return 1
+        print(f"[{it['id']}] {it['title']}")
+        for point in it.get("summary") or []:
+            print(f"  - {point}")
+        if it.get("tier"):
+            line = f"verdict: {it['tier']}"
+            if it.get("gate_reason"):
+                line += f" — waiting on: {it['gate_reason']}"
+            print(f"  {line}")
+        # Through repos_of so a hand-edited legacy value cannot char-split in the display.
+        if c.repos_of(it):
+            print(f"  repos: {' + '.join(c.repos_of(it))}")
+        meta = f"created: {it.get('created')}   done: {it.get('done')}"
+        if it.get("surface_on"):
+            meta += f"   surface_on: {it['surface_on']}"
+        print(meta)
+        if it.get("detail"):
+            print(f"\n{it['detail']}")
+        return 0
+
+    if args.cmd == "done":
+        it = c.get_item(items, args.id)
+        # ---- EVIDENCE GATE ------------------------------------------------------------
+        # An item may only be closed with a statement of what was achieved. This is a REFUSAL
+        # rather than a nudge on purpose: guidance in a skill or a banner can be skipped, a
+        # non-zero exit cannot. Checked BEFORE mark_done so a refused close leaves the item
+        # fully open -- a half-applied close would be worse than no gate at all.
+        #
+        # The check is for a CONCRETE REFERENCE, not for length. A minimum-characters rule is
+        # satisfied by padding, so it would only look like it implements "real work or
+        # substantial existing evidence it can point to"; what makes evidence checkable is that
+        # it POINTS somewhere. Deliberately generous about the form (sha, path, version, test
+        # count, command, URL, issue/PR) because being strict here would push people to
+        # --no-evidence, which loses more information than a loosely-formatted reference.
+        if it is not None and not it.get("done"):
+            if args.evidence is None and args.no_evidence is None:
+                print(f"refusing to close [{args.id}] without evidence of what was achieved.")
+                print("  Say what was done and point at something concrete:")
+                print(f'    waypoints.py done {args.id} --evidence "…, commit <sha>, tests N/N"')
+                print("  If it closes for another reason (duplicate, superseded, obsolete):")
+                print(f'    waypoints.py done {args.id} --no-evidence "superseded by <id>"')
+                return 2
+            if args.evidence is not None and args.no_evidence is not None:
+                print("pass either --evidence or --no-evidence, not both")
+                return 2
+            if args.evidence is not None and not c.points_at_something(args.evidence):
+                print(f"that evidence does not point at anything checkable: {args.evidence!r}")
+                print("  It reads as an off-hand comment. Name something a reader could open:")
+                print("    a commit sha, file:line, a version/tag, a test count, a command, a URL.")
+                print(f'  Or close it as unevidenced:  --no-evidence "<why it closes anyway>"')
+                return 2
+            note = (f"CLOSED: {args.evidence}" if args.evidence is not None
+                    else f"CLOSED WITHOUT EVIDENCE OF WORK: {args.no_evidence}")
+            c.edit_item(items, args.id, summary=list(it.get("summary") or []) + [note])
+        ok = c.mark_done(items, args.id, resolved_title=args.resolved)
+        c.save_store(store)
+        if not ok:
+            print(f"no such id: {args.id}")
+            return 1
+        print(f"marked done: {args.id}")
+        # Closing an item is the EVENT that releases anything waiting on it, so promotion
+        # happens here rather than on read. A store that mutated every time it was listed would
+        # make `list` unsafe to run, and the release would then be attributed to whoever
+        # happened to look next instead of to the close that actually caused it.
+        released = c.promote_landed_waiting(items, c.load_archive()["items"])
+        if released:
+            c.save_store(store)
+            print(f"released {len(released)} item(s) that were waiting on this:")
+            for rel, target, milestone in released:
+                print(f"  ⏵ [{rel['id']}] {rel['title']}")
+            print("    Each is now UNTRIAGED on purpose — its own weight was never assessed "
+                  "while it waited, so it needs a verdict rather than an assumed one.")
+        # Point-of-action guard: if the title still reads as an open question/decision and no
+        # resolution was recorded, nudge (non-blocking — the close already happened) so a bare ✓
+        # doesn't leave the answer implicit. Re-running `done --as` on a done item is safe.
+        if args.resolved is None and it is not None and c.looks_unresolved(it.get("title", "")):
+            print(
+                f"⚠️  This title reads as an open question — its ✓ won't say how it resolved.\n"
+                f"    Record the outcome:  waypoints.py done {args.id} --as \"<what actually happened>\"",
+                file=sys.stderr)
+        return 0
+
+    if args.cmd == "reopen":
+        # Multi-store: the live store wins (an id that exists in both is a live item, even a
+        # done one — prefer it and name the archived namesake rather than silently picking).
+        live = c.get_item(items, args.id)
+        arch = c.load_archive()
+        archived = c.get_item(arch["items"], args.id)
+        if live is not None:
+            if live.get("done"):
+                c.reopen_item(items, args.id)
+                c.save_store(store)
+            if archived is not None:
+                print(
+                    f"note: an archived item with the same id exists "
+                    f"(archived {archived.get('archived_at') or 'unknown'}) — "
+                    f"the live copy was the one reopened",
+                    file=sys.stderr)
+            print(f"reopened: {args.id}")
+            return 0
+        if archived is not None:
+            # Auto-restore + reopen in one step: it would otherwise be stranded, still done,
+            # out of the banner — exactly the trap that 0.3.0's destroy-on-prune created.
+            if args.id in [i["id"] for i in items]:
+                items.append(archived)
+            else:
+                items.insert(0, archived)  # fresh id -> top of the queue
+            archived["done"] = False
+            archived["restored_at"] = c.today()
+            # archived_at is KEPT: it is the trail's record of when this closed, and a restore
+            # should add a fact, not erase one. `restored_at` alone says where it is now.
+            arch["items"] = [i for i in arch["items"] if i["id"] != args.id]
+            c.save_store(store)
+            c.save_archive(arch)
+            print(f"restored from archive and reopened: {args.id}")
+            return 0
+        print("no such id: not in the live store or the archive")
+        return 1
+
+    if args.cmd == "restore":
+        arch = c.load_archive()
+        aitem = c.get_item(arch["items"], args.id)
+        if aitem is None:
+            print(f"no such id in the archive: {args.id}")
+            return 1
+        if args.id in [i["id"] for i in items]:
+            print(f"refusing: {args.id} is already in the live store — use `edit`/`reopen` on it")
+            return 2
+        # Back as DONE — restore is a move, not a re-open; `reopen` is the one-step form.
+        # archived_at is KEPT for the same reason as in `reopen`: it records when the item closed.
+        aitem["restored_at"] = c.today()
+        arch["items"] = [i for i in arch["items"] if i["id"] != args.id]
+        items.insert(0, aitem)
+        c.save_store(store)
+        c.save_archive(arch)
+        print(f"restored to the live store (still done): {args.id} — `reopen {args.id}` to re-open")
+        return 0
+
+    if args.cmd == "toggle":
+        new_state = c.toggle_done(items, args.id)
+        if new_state is None:
+            print(f"no such id: {args.id}")
+            return 1
+        c.save_store(store)
+        print(f"{args.id} is now {'done' if new_state else 'open'}")
+        return 0
+
+    if args.cmd in ("pin", "unpin"):
+        want = args.cmd == "pin"
+        try:
+            it = c.set_pinned(items, args.id, want, getattr(args, "because", None))
+        except ValueError as e:
+            print("%s\nExample: waypoints.py pin %s --because \"user wants it today; the tier "
+                  "order would push it past the whole do-now pile\"" % (e, args.id),
+                  file=sys.stderr)
+            return 2
+        if it is None:
+            print(f"no such waypoint: {args.id}", file=sys.stderr)
+            return 1
+        c.save_store(store)
+        if want:
+            print(f"📌 pinned [{it['id']}] {it['title']}\n   tier stays {it.get('tier') or 'untriaged'} "
+                  f"— a pin changes WHEN it runs, not how big it is\n   because: {it['pin_reason']}")
+        else:
+            print(f"unpinned [{it['id']}] {it['title']} — the tier order applies again")
+        return 0
+
+    if args.cmd == "priority":
+        it = c.set_priority(items, args.id, args.level)
+        if it is None:
+            print(f"no such id: {args.id}")
+            return 1
+        c.save_store(store)
+        print(f"priority [{it['id']}] = {it['priority']}")
+        return 0
+
+    if args.cmd == "reorder":
+        ok = c.reorder_item(items, args.id, args.position)
+        c.save_store(store)
+        print(f"reordered: {args.id}" if ok else f"no such id: {args.id}")
+        return 0 if ok else 1
+
+    if args.cmd == "triage":
+        if args.clear and (args.tier or args.gate_reason or args.waiting_on):
+            print("--clear cannot be combined with --tier/--gate-reason/--waiting-on")
+            return 2
+        try:
+            if args.clear:
+                it = c.set_verdict(items, args.id, tier=None)
+            else:
+                kw = {}
+                if args.tier is not None:
+                    kw["tier"] = args.tier
+                if args.gate_reason is not None:
+                    kw["gate_reason"] = args.gate_reason
+                if args.waiting_on is not None:
+                    kw["waiting_on"] = args.waiting_on
+                if not kw:
+                    print("nothing to set: pass --tier, --gate-reason, --waiting-on, or --clear")
+                    return 2
+                # Tier and target move in ONE call on purpose. Retiering away from gated drops
+                # gate_reason, so migrating a WAIT item in two steps would lose the prose in
+                # between -- and that prose is usually the only record of what it waited for.
+                it = c.set_verdict(items, args.id, **kw)
+        except c.VerdictError as e:
+            print(f"refused: {e}")
+            return 2
+        if it is None:
+            print(f"no such id: {args.id}")
+            return 1
+        c.save_store(store)
+        verdict = it.get("tier") or "untriaged"
+        extra = f" — {it['gate_reason']}" if it.get("gate_reason") else ""
+        if it.get("waiting_on"):
+            extra = f" — waiting on {c.waiting_on_str(it)}"
+            status, target, _m = c.waiting_status(it, items, c.load_archive()["items"])
+            if status == c.WAITING_STALE:
+                extra += "   ⚠️ no item with that id — check the target before relying on it"
+            elif status == c.WAITING_LANDED:
+                extra += "   ⚠️ that target is already done — run `waypoints resolve`"
+        print(f"triaged [{it['id']}] {verdict}{extra}")
+        return 0
+
+    if args.cmd == "prune":
+        kept, archived_batch = c.prune(items)
+        if not archived_batch:
+            print("no done items to archive")
+            return 0
+        arch = c.load_archive()
+        existing = {i["id"] for i in arch["items"]}
+        for i in archived_batch:
+            if i["id"] not in existing:  # re-prune of the same done item: idempotent no-op
+                arch["items"].append(i)
+        store["items"] = kept
+        c.save_store(store)
+        c.save_archive(arch)
+        print(
+            f"archived {len(archived_batch)} done item(s) to {c.archive_path()} "
+            f"(nothing was destroyed: `reopen <id>` restores; `archive list` shows the trail; "
+            f"`rm <id> --delete --confirm` is the only path to permanent deletion)")
+        return 0
+
+    if args.cmd == "rm":
+        live = c.get_item(items, args.id)
+        if args.delete:
+            # The deliberate two-step. Without BOTH flags this refuses — 0.3.0's
+            # --point/--replace-points idiom: no destructive default, exit 2, name the flag.
+            if not args.confirm:
+                print("refusing: permanent deletion requires BOTH --delete AND --confirm.")
+                print(f"  The archive is the paper trail of how things resolved; deleting it is "
+                      f"your call, made deliberately.")
+                print(f"  To really delete:  waypoints.py rm {args.id} --delete --confirm")
+                return 2
+            if live is not None:
+                print(
+                    f"refusing: {args.id} is still in the LIVE store — the two-step deletes "
+                    f"from the ARCHIVE only (its purpose is destroying the paper trail, which a "
+                    f"live item doesn't have yet).")
+                print(f"  Step 1 (archive it):  waypoints.py rm {args.id}"
+                      + ("   [it is OPEN — that step will close it]"
+                         if not live.get("done") else ""))
+                print(f"  Step 2 (destroy it):   waypoints.py rm {args.id} --delete --confirm")
+                return 2
+            arch = c.load_archive()
+            aitem = c.get_item(arch["items"], args.id)
+            if aitem is None:
+                print(f"no such id in the archive: {args.id} — nothing to delete")
+                return 1
+            arch["items"] = [i for i in arch["items"] if i["id"] != args.id]
+            c.save_archive(arch)
+            print(f"permanently deleted from the archive: [{aitem['id']}] {aitem['title']}")
+            return 0
+        # Bare rm = remove from the LIVE store, into the archive (a move, never a destruction).
+        if live is None:
+            arch = c.load_archive()
+            if c.get_item(arch["items"], args.id) is not None:
+                print(
+                    f"{args.id} is not in the live store — it is ARCHIVED "
+                    f"(the paper trail is recoverable: `restore {args.id}` brings it back, "
+                    f"`archive show {args.id}` reads it, `rm {args.id} --delete --confirm` "
+                    f"is the only way to destroy it)")
+            else:
+                print(f"no such id: {args.id} (not in the live store or the archive)")
+            return 2
+        arch = c.load_archive()
+        existing = {i["id"] for i in arch["items"]}
+        if args.id in existing:
+            print(
+                f"refusing: the archive already holds {args.id} — refusing to silently "
+                f"overwrite its closed record (restore the archived copy or delete it with "
+                f"`rm {args.id} --delete --confirm`, then re-rm)")
+            return 2
+        was_open = not live.get("done")
+        live["done"] = True
+        live["archived_at"] = c.today()
+        items.remove(live)
+        arch["items"].append(live)
+        c.save_store(store)
+        c.save_archive(arch)
+        print(f"archived (removed from live, recoverable): [{live['id']}] {live['title']}")
+        if was_open:
+            # rm exists precisely to clear a stray OPEN item (a test probe, a mistake) without a
+            # hand-edit of the store. Say plainly that an open item was closed on the way out, so
+            # the state change is visible rather than inferred.
+            print(f"  note: it was OPEN — archiving marked it done. "
+                  f"`reopen {args.id}` puts it back in the queue in one step.")
+        return 0
+
+    if args.cmd == "journal":
+        entries = c.read_journal(item_id=args.id, since=args.since)
+        if not entries:
+            where = c.journal_path()
+            if not os.path.exists(where):
+                print(f"(no journal yet at {where} — it starts at the next change)")
+            else:
+                print("(no journal entries match)")
+            return 0
+        for e in entries:
+            argv = " ".join(_journal_argv_token(a) for a in e.get("argv") or []) or "(no argv recorded)"
+            src_tag = "" if e.get("source") == "store" else f" [{e.get('source')}]"
+            print(f"  {e.get('at')}{src_tag}  waypoints {argv}")
+            for ch in e.get("changes") or []:
+                print(f"      {_journal_change_line(ch)}")
+        plural = "entry" if len(entries) == 1 else "entries"
+        print(f"\n  {len(entries)} {plural} in {c.journal_path()}")
+        return 0
+
+    if args.cmd == "archive":
+        arch = c.load_archive()
+        aitems = arch["items"]
+        if args.archive_cmd == "list":
+            if args.json:
+                print(json.dumps(c.archive_payload(aitems), indent=2, ensure_ascii=False))
+                return 0
+            if not aitems:
+                print("(no archived waypoints)")
+                return 0
+            for i in aitems:
+                at = f" (archived {i['archived_at']})" if i.get("archived_at") else ""
+                print(f"  • [{i['id']}] {i['title']}{at}")
+            print(f"\n  {len(aitems)} archived item(s) in {c.archive_path()}")
+            return 0
+        if args.archive_cmd == "show":
+            aitem = c.get_item(aitems, args.id)
+            if aitem is None:
+                print(f"no such id in the archive: {args.id}")
+                return 1
+            print(f"[{aitem['id']}] {aitem['title']}")
+            for point in aitem.get("summary") or []:
+                print(f"  - {point}")
+            if aitem.get("tier"):
+                line = f"verdict: {aitem['tier']}"
+                if aitem.get("gate_reason"):
+                    line += f" — waiting on: {aitem['gate_reason']}"
+                print(f"  {line}")
+            meta = f"created: {aitem.get('created')}"
+            if aitem.get("archived_at"):
+                meta += f"   archived: {aitem['archived_at']}"
+            if aitem.get("restored_at"):
+                meta += f"   restored: {aitem['restored_at']}"
+            print(meta)
+            if aitem.get("detail"):
+                print(f"\n{aitem['detail']}")
+            return 0
+        return 2
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

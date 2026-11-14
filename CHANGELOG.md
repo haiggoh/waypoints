@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.15.1] — 2026-11-14
+
+### Added — Phase 2: committed portable package + published record schema (C1/C2/C4)
+
+- `scripts/build-portable.py` generates the committed `portable/` package: same-name
+  manifest, skill + slash command (CLI refs rewritten `bin/` -> `scripts/`), the
+  SessionStart hook, and the CLI moved to `scripts/waypoints.py` with its import closure
+  (`waypoints_core.py`, `waypoints_menu.py`, `__init__.py`) copied to the portable ROOT
+  where the CLI's sys.path insert looks for them. Emits `PORTABLE-BUILD.json`
+  (haiggoh-portable-build/1) and a deterministic `dist/waypoints-portable.zip`.
+- `docs/record-schema.md` publishes the C4 record schema (store/item/change fields,
+  single-writer + atomic-write transport rules, absence-is-not-deletion).
+- `tests/test_portable.py` pins freshness, same-name manifest, no `bin/`, no stale refs,
+  closure completeness, C2 schema, deterministic side-effect-free zip — and a FUNCTIONAL
+  test that runs the portable CLI against a WAYPOINTS_FILE-isolated store (a smoke run
+  without that override once wrote a test item into the real store; cleaned via the CLI).
+
 ## [0.15.0] — 2026-11-14
 
 ### Changed — 🧭 shorter banner: pinned section + user-settable limits

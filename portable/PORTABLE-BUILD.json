@@ -1,0 +1,129 @@
+{
+  "builder": "scripts/build-portable.py",
+  "builder_version": "1.0.0",
+  "components": [
+    {
+      "adaptation_class": "mechanical",
+      "evidence_level": "source-inspected",
+      "kind": "manifest",
+      "notes": "same name+version as the host manifest; an installed marketplace plugin wins over a synced copy in Code, so no double-run",
+      "path": ".claude-plugin/plugin.json",
+      "surfaces": {
+        "chat": true,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "mechanical",
+      "evidence_level": "source-inspected",
+      "kind": "skill",
+      "notes": "CLI references rewritten bin/ -> scripts/; strict-YAML frontmatter pinned by tests",
+      "path": "skills/waypoints/SKILL.md",
+      "surfaces": {
+        "chat": true,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "mechanical",
+      "evidence_level": "source-inspected",
+      "kind": "command",
+      "notes": "slash command; CLI reference rewritten bin/ -> scripts/",
+      "path": "commands/waypoints-gated.md",
+      "surfaces": {
+        "chat": true,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "mechanical",
+      "evidence_level": "source-inspected",
+      "kind": "hooks",
+      "notes": "Chat ignores plugin hooks, Cowork loads them; SessionStart banner hook",
+      "path": "hooks/hooks.json",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "hook-script",
+      "notes": "stdlib-only, reads the store JSON directly; portable as-is",
+      "path": "hooks/waypoints.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "mechanical",
+      "evidence_level": "source-inspected",
+      "kind": "cli",
+      "notes": "moved bin/ -> scripts/ per C1; adds the portable root to sys.path and imports the core modules copied alongside at the root",
+      "path": "scripts/waypoints.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "library",
+      "notes": "store logic at the portable root \u2014 bin/waypoints.py puts the root on sys.path",
+      "path": "waypoints_core.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "library",
+      "notes": "interactive selector; imports waypoints_core from the same root",
+      "path": "waypoints_menu.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "library",
+      "notes": "package marker copied with the root modules",
+      "path": "__init__.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    }
+  ],
+  "files": {
+    ".claude-plugin/plugin.json": "782d84c78a14e411df15efe9c8427168c3fc2bf48e9d3fdd180de5aebd21c3f0",
+    "__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "commands/waypoints-gated.md": "fcc414e248057ce0460f194b63a8b9e76be48a0497c54e8b552380a645c7a5e0",
+    "hooks/hooks.json": "d3abeb75c95f75c0b9cb15bc5e3658a175499da9019815468e3764b5b9ee78ab",
+    "hooks/waypoints.py": "01544befc389450650d002c69c28481664fbc3d80a282a76a41abdffd544eb57",
+    "scripts/waypoints.py": "eda71ecfa375f2ff4b742696ea3d9146aa480898b8c468b5352336ed515557d6",
+    "skills/waypoints/SKILL.md": "d7d30920c09bc2bee935428146a92b27c4a236a53fd32ac2069c7d7bc90f1905",
+    "waypoints_core.py": "b34c4b2ffdc8b93d4a63217dedf5ca8a4401b2fdce812ac3e563430a2e8a3e73",
+    "waypoints_menu.py": "0453eff6be210fffd72a387170875641064c2e7510a492d0d0a2363ae2dbdd6b"
+  },
+  "schema": "haiggoh-portable-build/1",
+  "source_commit": "c095d5dab8692647c7e67a435dc1530cd29d33bb",
+  "source_repo": "haiggoh/waypoints",
+  "transform_version": "1"
+}
