@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.15.2] — 2026-11-15
+
+### Fixed — Phase 5 Wave C: waypoints writer safety
+
+- **Single-writer lock.** `waypoints_core.store_lock()` takes an advisory fcntl lock on
+  `<store>.lock` around every mutating command (dispatch choke point in main); it is
+  cross-process, re-entrant within one process (the menu re-enters main per action), and
+  refuses loudly (StoreBusy) past a timeout instead of stalling. Read-only commands never
+  take it. Without it, two concurrent sessions could lose an update (read-modify-write race).
+- **Corrupt archive is refused, not silently empty.** `load_archive()` is strict by
+  default now: an existing but corrupt archive is quarantined and raised as StoreCorrupt
+  (same as the live store), and `archive` commands report it and exit 2. Cosmetic readers
+  (the resolve promotion check) pass strict=False explicitly. Before, a corrupt archive
+  read as "no archived items".
+- Re-derived and already-resolved: the never-hand-edit-JSON rule is stated consistently and
+  no code path bypasses the module; backup/journal/atomic-write were already in place.
+- New tests/test_writer_safety.py pins lock serialization across processes, re-entrancy,
+  read-only commands running lock-free, mutating commands waiting, and the corrupt-archive
+  refusal. Suite 454/454.
+
 ## [0.15.1] — 2026-11-14
 
 ### Added — Phase 2: committed portable package + published record schema (C1/C2/C4)

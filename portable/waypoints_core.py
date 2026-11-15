@@ -33,6 +33,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import tempfile
 import textwrap
 
@@ -241,6 +242,67 @@ def valid_backups(store=None):
     return out
 
 
+# ---------------------------------------------------------------- single-writer lock
+try:
+    import fcntl
+except ImportError:  # non-POSIX: no advisory locks; the lock degrades to a no-op
+    fcntl = None
+
+_LOCK_STATE = {"depth": 0, "fd": None}
+
+
+class StoreBusy(RuntimeError):
+    """The store is locked by another process beyond the timeout — refused, never stalled."""
+
+
+class store_lock:
+    """Advisory exclusive lock on <store>.lock, held around a read-modify-write.
+
+    Cross-process via fcntl.flock; re-entrant within one process (the menu re-enters
+    main per action, so a non-reentrant lock would deadlock against itself); loud on
+    timeout (StoreBusy) so a contended write refuses instead of hanging. Read-only
+    commands must not take it.
+    """
+
+    def __init__(self, path=None, timeout=10.0):
+        self.path = path or store_path()
+        self.lock_path = self.path + ".lock"
+        self.timeout = timeout
+        self.fd = None
+
+    def __enter__(self):
+        if _LOCK_STATE["depth"] > 0:
+            _LOCK_STATE["depth"] += 1
+            return self
+        if fcntl is None:
+            _LOCK_STATE["depth"] = 1
+            return self  # no advisory locks on this platform; backup+journal still guard data
+        fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    os.close(fd)
+                    raise StoreBusy(
+                        "store is locked by another process (waited %.1fs): %s — "
+                        "refusing to avoid a lost update; retry shortly" % (self.timeout, self.lock_path))
+                time.sleep(0.05)
+        _LOCK_STATE.update(depth=1, fd=fd)
+        self.fd = fd
+        return self
+
+    def __exit__(self, *exc):
+        _LOCK_STATE["depth"] -= 1
+        if _LOCK_STATE["depth"] == 0 and self.fd is not None:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+            os.close(self.fd)
+            _LOCK_STATE["fd"] = None
+        return False
+
+
 def load_store(path=None, strict=True):
     """Read the store. `strict` (the default) RAISES StoreCorrupt on damaged content.
 
@@ -436,10 +498,15 @@ def save_store(store, path=None, argv=None):
     return path
 
 
-def load_archive(path=None):
-    """The archive store — same shape as the live store. Corrupt/missing reads as empty,
-    mirroring load_store's fail-safe: the archive is a reference copy, and a bad read of
-    it must never wedge a session that only came to move items into it."""
+def load_archive(path=None, strict=True):
+    """The archive store — same shape as the live store.
+
+    A MISSING archive is a first run and reads as empty in both modes. A CORRUPT
+    existing archive is refused under strict (the default): it is quarantined and
+    raised as StoreCorrupt, exactly like the live store — reading it as silently empty
+    would make a damaged paper trail look like "no archived items". Callers whose read
+    is cosmetic pass strict=False and get the empty store.
+    """
     path = path or archive_path()
     try:
         with open(path) as f:
@@ -447,8 +514,14 @@ def load_archive(path=None):
         if not isinstance(d, dict) or not isinstance(d.get("items"), list):
             raise ValueError("bad shape")
         return d
-    except Exception:
+    except FileNotFoundError:
         return {"version": VERSION, "items": []}
+    except Exception as e:
+        if not strict:
+            return {"version": VERSION, "items": []}
+        raise StoreCorrupt(path, "%s: %s" % (type(e).__name__, e),
+                           quarantine=quarantine_corrupt(path),
+                           backups=valid_backups(path))
 
 
 def save_archive(arch, path=None, argv=None):

@@ -112,18 +112,18 @@
     }
   ],
   "files": {
-    ".claude-plugin/plugin.json": "782d84c78a14e411df15efe9c8427168c3fc2bf48e9d3fdd180de5aebd21c3f0",
+    ".claude-plugin/plugin.json": "2492d9f5095a0aeed084f7a6e2651a897398709c3d9e2c03a440c84ac43db2dc",
     "__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "commands/waypoints-gated.md": "e4263c13311c26fb54a8085fd4481f7ceb1199703d74c12b121813513e01ba19",
     "hooks/hooks.json": "d3abeb75c95f75c0b9cb15bc5e3658a175499da9019815468e3764b5b9ee78ab",
     "hooks/waypoints.py": "e8524136633663dc7c2997567b27ddf833630b8714749519484acfb29d3bcf38",
-    "scripts/waypoints.py": "7a24fded1f60d5bdb9cae99509960ea8340a5a11e73962d2fad6ddc2d82ebb92",
+    "scripts/waypoints.py": "89b3d6cf3207bc928bffaa5974b50a2904ae7807be306946ed0b65d9df87d053",
     "skills/waypoints/SKILL.md": "49045658051bf57ef00dc31cbba8c8ba8370eb5358c0bd40e5b8846e530deb29",
-    "waypoints_core.py": "d05befa4ee52e569a5cd58c18d3b795c0130a504206f5b2d4b195754c26e708f",
+    "waypoints_core.py": "5b9f667f2dff974bd42068c28cb321ec0a5c830d45e06cc290e7c5e18c3d2a39",
     "waypoints_menu.py": "0453eff6be210fffd72a387170875641064c2e7510a492d0d0a2363ae2dbdd6b"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "df1e748140be045fe502976875c91e42d8a4b8eb",
+  "source_commit": "08a33d0eb70916cd0d56882938a71569cef56768",
   "source_repo": "haiggoh/waypoints",
   "transform_version": "1"
 }
