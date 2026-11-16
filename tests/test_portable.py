@@ -57,8 +57,9 @@ def test_no_stale_bin_references_and_import_closure_at_root():
         if p.is_file() and p.suffix in (".json", ".sh", ".py", ".md") \
                 and p.name != "PORTABLE-BUILD.json":  # its notes may name the old path
             text = p.read_text(encoding="utf-8", errors="replace")
-            assert not stale_re.search(text), \
-                f"stale host-PATH guidance in {p.relative_to(PORTABLE)}: {stale_re.search(text).group(0)}"
+            m = stale_re.search(text)
+            assert m is None, \
+                f"stale host-PATH guidance in {p.relative_to(PORTABLE)}: {m.group(0) if m else ''}"
     for mod in ("waypoints_core.py", "waypoints_menu.py", "__init__.py"):
         assert (PORTABLE / mod).is_file(), f"import-closure module missing at portable root: {mod}"
     import ast as _ast

@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.15.3] — 2026-11-16
+
+### Fixed — pyright clean (0 errors repo-wide)
+
+- `bin/waypoints.py`: removed the 14 obscured duplicate function definitions
+  (a copy-pasted block at old lines 115–709; the later definitions were already the
+  live ones, and all 13 helpers were AST-verified byte-identical, `main` differed but
+  was equally superseded — zero behavior change). Fixed the `--set-point` optional
+  narrowing with an explicit `assert`.
+- `waypoints_core.py`: guard the `fcntl.flock` unlock behind `fcntl is not None`
+  (the import is guarded for non-POSIX); `set_pinned(reason=...)` annotated
+  `str | None` and the pin_reason assignment uses `(reason or "").strip()`;
+  `edit_item` asserts the summary argument is a list/tuple before `list()`.
+- `tests/`: narrow optional returns with explicit `assert ... is not None` before
+  subscripting (`get_item`, `edit_item`, `set_priority`, `_backup_before_write`,
+  `re.search(...).group`), renamed an ambiguous `l` loop variable (E741).
+- `portable/` rebuilt (build-portable.py) so the shipped copy is byte-current.
+- Gates: pyright 0 errors (pytest venv pythonpath), `pytest -n auto` 454/454.
+
 ## [0.15.2] — 2026-11-15
 
 ### Fixed — Phase 5 Wave C: waypoints writer safety

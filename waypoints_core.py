@@ -297,7 +297,8 @@ class store_lock:
     def __exit__(self, *exc):
         _LOCK_STATE["depth"] -= 1
         if _LOCK_STATE["depth"] == 0 and self.fd is not None:
-            fcntl.flock(self.fd, fcntl.LOCK_UN)
+            if fcntl is not None:  # POSIX only; no-op elsewhere (see the guarded import)
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
             os.close(self.fd)
             _LOCK_STATE["fd"] = None
         return False
@@ -1240,6 +1241,7 @@ def edit_item(items, item_id, title=_UNSET, summary=_UNSET, detail=_UNSET, surfa
     if title is not _UNSET:
         it["title"] = title
     if summary is not _UNSET:
+        assert isinstance(summary, (list, tuple))  # callers pass bullet lists; _UNSET handled above
         it["summary"] = list(summary) if summary else []
     if detail is not _UNSET:
         it["detail"] = detail
@@ -1313,7 +1315,7 @@ def is_pinned(item):
     return bool(item.get("pinned"))
 
 
-def set_pinned(items, item_id, pinned, reason=None):
+def set_pinned(items, item_id, pinned, reason: "str | None" = None):
     """Pin/unpin an item: "heavy, but do it now anyway", made machine-visible.
 
     The gap this closes: tier ordering DOMINATES priority (a consumer runs the do-now pile
@@ -1337,7 +1339,7 @@ def set_pinned(items, item_id, pinned, reason=None):
         if not (reason or "").strip():
             raise ValueError("pinning requires a reason (why this outranks the tier order)")
         it["pinned"] = True
-        it["pin_reason"] = reason.strip()
+        it["pin_reason"] = (reason or "").strip()
     else:
         it.pop("pinned", None)
         it.pop("pin_reason", None)

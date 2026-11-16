@@ -123,12 +123,13 @@ def test_add_item_defaults_summary_to_empty_list():
 def test_add_item_stores_summary_list():
     items = []
     it = c.add_item(items, "Do X", summary=["point one", "point two"], created="2026-07-14")
-    assert it["summary"] == ["point one", "point two"]
+    assert it is not None and it["summary"] == ["point one", "point two"]
 
 
 def test_get_item_returns_match_or_none():
     items = [{"id": "k", "title": "K"}]
-    assert c.get_item(items, "k")["title"] == "K"
+    gi = c.get_item(items, "k")
+    assert gi is not None and gi["title"] == "K"
     assert c.get_item(items, "nope") is None
 
 
@@ -325,7 +326,7 @@ def test_set_priority_updates_item():
     c.add_item(items, "Title", created="2026-07-14")
     iid = items[0]["id"]
     it = c.set_priority(items, iid, 5)
-    assert it["priority"] == 5
+    assert it is not None and it["priority"] == 5
     assert items[0]["priority"] == 5
 
 
@@ -737,6 +738,7 @@ def test_backups_of_store_and_archive_stay_distinguishable(tmp_path):
     _write_store(arch, "closed")
     a = c._backup_before_write(str(store))
     b = c._backup_before_write(str(arch), str(store))
+    assert a is not None and b is not None
     assert os.path.dirname(a) == os.path.dirname(b), "both rings share one directory"
     assert os.path.basename(a).startswith("waypoints.")
     assert os.path.basename(b).startswith("waypoints-archive.")
@@ -852,11 +854,15 @@ def test_capped_banner_still_accounts_for_every_open_item():
                       "done": False, "tier": "gated", "gate_reason": "blocked"})
     surf = c.surfaceable(items, "2026-08-27")
     out = c.format_banner(surf)
-    listed = len([l for l in out.splitlines() if l.startswith("  • ")])
+    listed = len([ln for ln in out.splitlines() if ln.startswith("  • ")])
     flat = _flat(out)
-    unlisted = int(re.search(r"and (\d+) more open", flat).group(1))
-    gated = int(re.search(r"⛔ (\d+) gated", flat).group(1))
-    total = int(re.search(r"(\d+) open waypoint", flat).group(1))
+    m_unlisted = re.search(r"and (\d+) more open", flat)
+    m_gated = re.search(r"⛔ (\d+) gated", flat)
+    m_total = re.search(r"(\d+) open waypoint", flat)
+    assert m_unlisted is not None and m_gated is not None and m_total is not None
+    unlisted = int(m_unlisted.group(1))
+    gated = int(m_gated.group(1))
+    total = int(m_total.group(1))
     assert listed + unlisted + gated == total == len(surf)
 
 
@@ -1490,7 +1496,9 @@ def test_the_refusal_report_names_the_backup_and_the_command(tmp_path, monkeypat
     with pytest.raises(c.StoreCorrupt) as ei:
         c.load_store()
     r = ei.value.report()
-    assert "REFUSING" in r and "recover" in r and ei.value.newest_backup in r
+    assert "REFUSING" in r and "recover" in r
+    nb = ei.value.newest_backup
+    assert nb is not None and nb in r
 
 
 # ---- 0.7.0: pinned — "heavy, but do it now anyway" ----
@@ -1657,12 +1665,12 @@ def test_edit_item_sets_and_clears_repos():
     items = []
     c.add_item(items, "categorise me")
     it = c.edit_item(items, items[-1]["id"], repos=["free-agents"])
-    assert it["repos"] == ["free-agents"]
+    assert it is not None and it["repos"] == ["free-agents"]
     it = c.edit_item(items, items[-1]["id"], repos=None)   # the clear
-    assert "repos" not in it
+    assert it is not None and "repos" not in it
     c.edit_item(items, items[-1]["id"], repos=["free-agents"])
     it = c.edit_item(items, items[-1]["id"], repos=[])     # empty list clears too
-    assert "repos" not in it
+    assert it is not None and "repos" not in it
 
 
 def test_edit_item_leaves_repos_alone_when_not_passed():
