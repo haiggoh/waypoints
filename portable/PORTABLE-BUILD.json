@@ -140,16 +140,16 @@
     "__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "commands/waypoints-gated.md": "e4263c13311c26fb54a8085fd4481f7ceb1199703d74c12b121813513e01ba19",
     "hooks/hooks.json": "0c31a4033454a54816d256ee12d0b63c041f38035d2c0c835e80213a3343711e",
-    "hooks/register.tsx": "1c16b4db4faa5ca52c7bce86b5a3cec9463cde38fb8f75f242be74e2b8be531c",
+    "hooks/register.tsx": "0891ca96e64b658828757ca38f94b18806eba588ecc0d108aa0db84629a6b6aa",
     "hooks/waypoints.py": "448f5fe34c3997d8c55089ffd67667b96f78bc0ed71d59e103170ad722d63974",
     "scripts/waypoints.py": "59e60bcdab08c0a7b463e0446e376e13a6dff918cebffb77467fec3c4f77942d",
     "skills/waypoints/SKILL.md": "49045658051bf57ef00dc31cbba8c8ba8370eb5358c0bd40e5b8846e530deb29",
-    "types/index.d.ts": "d520887ededf8d05fd4d89b2001a15b57c90456f5ca2f76e2bb15efdbf0ac059",
-    "waypoints_core.py": "44825bf9b8d1bc89d7a257f6c84004ff996c30558b30bd66b195e7fb624a4d9a",
-    "waypoints_menu.py": "754cdc3cba69aab9f64b4152cbe79fd1b9d673d7c8fe84b35259cc2456238507"
+    "types/index.d.ts": "cfa379550034ad55a591c87c15e0c35a44da4acb398780bbab609a1e8756a9f9",
+    "waypoints_core.py": "7fb7272d4b26e30fff4c422b6b32c74dc3e4ce17b081e620f5bef66de973f10e",
+    "waypoints_menu.py": "5a3e97ebfdc61f73cb09b73beb1d6b47c264050fa45ef4a2faa8b6f8bd8481b9"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "fc0637c0f9639c1c05f44dbcca9a04d33fc2084b",
+  "source_commit": "c056021d88c67bf08d59291ab84e3f62fde7a1e0",
   "source_repo": "haiggoh/waypoints",
   "transform_version": "1"
 }

@@ -19,6 +19,7 @@
   mentions `waypoints`. `/waypoints-pane` opens the pane at any width; a pane the mod opens by
   itself draws from 144 terminal columns. Builds without mod support ignore the mod; keep
   `display` at `banner` there.
+- **`pane-style` setting** picks the collapsed-row look: `plain` (default: chrome-free, dim rows), `native`, `secondary`, `links` (markdown links, no boxes), `dark` (near-black rows) or `static` (text rows plus the shared Expand/Collapse buttons). A desktop draws every `Button` natively, so the looks differ in structure, not only colour. `/waypoints-style` previews all six with your own waypoints; set one with `waypoints.py config set pane-style <name>` (env `WAYPOINTS_PANE_STYLE`, also in the menu).
 - `portable/` rebuilt and now carries the mod and its types.
 
 ## [0.15.3] — 2026-11-16

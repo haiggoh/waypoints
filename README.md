@@ -207,6 +207,8 @@ Set it with `waypoints.py config set display pane|banner|both`, in the interacti
 
 The pane and band come from the Claude Code mod bundled in the plugin (`hooks/register.tsx`) and work in Claude Code (terminal) and the Claude desktop app's Code tab on builds that support mods; on builds without mod support, keep `display` at `banner`. Each waypoint is one collapsed row: press it to show its summary bullets and id, or use Expand all / Collapse all.
 
+Pick the look of a collapsed row with `waypoints.py config set pane-style plain|native|secondary|links|dark|static` (default `plain`; env `WAYPOINTS_PANE_STYLE`). `/waypoints-style` opens a pane that previews all six with your own waypoints.
+
 The pane and band are read-only and read the queue only through `waypoints.py list --open --json`; they refresh every 60 seconds and after any Bash call that mentions `waypoints`. `/waypoints-pane` opens the pane at any width; in the terminal, a pane the mod opens by itself draws only from 144 columns wide.
 
 ## The `waypoints` command, and why output size is a feature

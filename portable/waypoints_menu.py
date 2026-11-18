@@ -482,6 +482,8 @@ ACTIONS = [
          lambda items, arch: _a_setting("pin-lines")),
         ("display",       "where the queue shows: banner | pane | both",
          lambda items, arch: _a_setting("display")),
+        ("pane-style",    "collapsed-row look in the pane (preview: /waypoints-style)",
+         lambda items, arch: _a_setting("pane-style")),
     ]),
 ]
 

@@ -1632,6 +1632,21 @@ def _parse_display(raw):
     return s
 
 
+# How a collapsed row looks in the Claude Code pane. A desktop draws every Button natively
+# (grey chrome), so the looks differ in structure, not just colour: native = plain Button,
+# secondary = secondary Button, plain = chrome-free dim Button (default), links = markdown links,
+# dark = near-black row with a chevron button, static = text rows + shared Expand/Collapse buttons.
+PANE_STYLES = ("native", "secondary", "plain", "links", "dark", "static")
+PANE_STYLE_DEFAULT = "plain"
+
+
+def _parse_pane_style(raw):
+    s = str(raw).strip().lower()
+    if s not in PANE_STYLES:
+        raise ValueError("expected one of %s, got %r" % (" | ".join(PANE_STYLES), raw))
+    return s
+
+
 # key -> (env var, default, parser, one-line description). The key is what the CLI, the menu
 # and the settings file all use, so the three can never name one setting two ways.
 SETTINGS = {
@@ -1643,6 +1658,8 @@ SETTINGS = {
                   "lines per pin reason (a number, or 'full')"),
     "display": ("WAYPOINTS_DISPLAY", DISPLAY_DEFAULT, _parse_display,
                 "where the queue shows: banner | pane | both"),
+    "pane-style": ("WAYPOINTS_PANE_STYLE", PANE_STYLE_DEFAULT, _parse_pane_style,
+                   "collapsed-row look in the pane: " + " | ".join(PANE_STYLES)),
 }
 
 
