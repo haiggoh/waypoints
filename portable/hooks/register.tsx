@@ -194,7 +194,7 @@ export const register: Register = on => {
 
     const line = (r: Row) => (
       <Box key={r.id} flexDirection="column" marginBottom="xs">
-        <Button key={`row-${r.id}`} onPress={() => toggle(r.id)}>
+        <Button key={`row-${r.id}`} plain dimColor onPress={() => toggle(r.id)}>
           <Text>
             {open.has(r.id) ? '▾' : '▸'} {cut(r.title, 2)}
           </Text>
