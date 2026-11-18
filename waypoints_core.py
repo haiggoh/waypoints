@@ -1617,6 +1617,21 @@ def _parse_pin_lines(raw):
     return v
 
 
+# Where the open queue is shown. "banner" = the printed SessionStart banner (the only mode
+# before 0.16); "pane" = the Claude Code mod's side pane + band only (the banner is still handed
+# to the model, just not printed); "both" = banner and pane. Shipped default stays "banner" so
+# a Claude Code without mods, or a user who never opens the menu, sees no change.
+DISPLAY_MODES = ("banner", "pane", "both")
+DISPLAY_DEFAULT = "banner"
+
+
+def _parse_display(raw):
+    s = str(raw).strip().lower()
+    if s not in DISPLAY_MODES:
+        raise ValueError("expected one of %s, got %r" % (" | ".join(DISPLAY_MODES), raw))
+    return s
+
+
 # key -> (env var, default, parser, one-line description). The key is what the CLI, the menu
 # and the settings file all use, so the three can never name one setting two ways.
 SETTINGS = {
@@ -1626,6 +1641,8 @@ SETTINGS = {
                       "pinned items the banner lists"),
     "pin-lines": ("WAYPOINTS_BANNER_PIN_LINES", BANNER_PIN_LINES, _parse_pin_lines,
                   "lines per pin reason (a number, or 'full')"),
+    "display": ("WAYPOINTS_DISPLAY", DISPLAY_DEFAULT, _parse_display,
+                "where the queue shows: banner | pane | both"),
 }
 
 

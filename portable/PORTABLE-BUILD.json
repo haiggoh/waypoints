@@ -109,21 +109,47 @@
         "code": true,
         "cowork": true
       }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "mod",
+      "notes": "Claude Code mod: pane + band drawn only when display is pane or both; finds the CLI under bin/ or scripts/; builds without mod support ignore it",
+      "path": "hooks/register.tsx",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": false
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "mod-types",
+      "notes": "type contract for the mod's session state",
+      "path": "types/index.d.ts",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": false
+      }
     }
   ],
   "files": {
-    ".claude-plugin/plugin.json": "c8ecf9f9152f11cad85e092b2d0a0ae4d7967e75820e04f8e686c413caae0e76",
+    ".claude-plugin/plugin.json": "719abc8fc32cb708360f6e6e811c674150548a0318b3d050f53c88906e7f56e6",
     "__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "commands/waypoints-gated.md": "e4263c13311c26fb54a8085fd4481f7ceb1199703d74c12b121813513e01ba19",
-    "hooks/hooks.json": "d3abeb75c95f75c0b9cb15bc5e3658a175499da9019815468e3764b5b9ee78ab",
-    "hooks/waypoints.py": "e8524136633663dc7c2997567b27ddf833630b8714749519484acfb29d3bcf38",
-    "scripts/waypoints.py": "da0157f39b3f45811376fd823b772ee81115b0ff4dd43b4eeb57e491f481f9bd",
+    "hooks/hooks.json": "0c31a4033454a54816d256ee12d0b63c041f38035d2c0c835e80213a3343711e",
+    "hooks/register.tsx": "1c16b4db4faa5ca52c7bce86b5a3cec9463cde38fb8f75f242be74e2b8be531c",
+    "hooks/waypoints.py": "448f5fe34c3997d8c55089ffd67667b96f78bc0ed71d59e103170ad722d63974",
+    "scripts/waypoints.py": "59e60bcdab08c0a7b463e0446e376e13a6dff918cebffb77467fec3c4f77942d",
     "skills/waypoints/SKILL.md": "49045658051bf57ef00dc31cbba8c8ba8370eb5358c0bd40e5b8846e530deb29",
-    "waypoints_core.py": "53fea1446a6d37ed6e2e14c4dd72d763997ce383d9c117b3fe80597a82757776",
-    "waypoints_menu.py": "0453eff6be210fffd72a387170875641064c2e7510a492d0d0a2363ae2dbdd6b"
+    "types/index.d.ts": "d520887ededf8d05fd4d89b2001a15b57c90456f5ca2f76e2bb15efdbf0ac059",
+    "waypoints_core.py": "44825bf9b8d1bc89d7a257f6c84004ff996c30558b30bd66b195e7fb624a4d9a",
+    "waypoints_menu.py": "754cdc3cba69aab9f64b4152cbe79fd1b9d673d7c8fe84b35259cc2456238507"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "3d1bfef5c77fd87ec12430e283868e08a104367e",
+  "source_commit": "fc0637c0f9639c1c05f44dbcca9a04d33fc2084b",
   "source_repo": "haiggoh/waypoints",
   "transform_version": "1"
 }

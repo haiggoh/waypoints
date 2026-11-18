@@ -195,6 +195,20 @@ items span two or more repos, each tagged title gains a short `[repo]` marker (m
 `[first+N]`), counted against the title budget so the title is trimmed, never the tag;
 single-repo banners render exactly as before.
 
+## Display: banner, pane or both
+
+`display` selects where the open queue appears:
+
+- `banner` — default; the SessionStart banner prints exactly as before.
+- `pane` — the queue shows only in the Claude Code mod's side pane plus a one-line band above the prompt; the model still receives the full banner as context.
+- `both` — banner and pane.
+
+Set it with `waypoints.py config set display pane|banner|both`, in the interactive menu's `settings` group, or via `WAYPOINTS_DISPLAY`. Resolution order is `WAYPOINTS_DISPLAY` > settings file > default. `waypoints.py config get display --raw` prints just the current value.
+
+The pane and band come from the Claude Code mod bundled in the plugin (`hooks/register.tsx`) and work in Claude Code (terminal) and the Claude desktop app's Code tab on builds that support mods; on builds without mod support, keep `display` at `banner`. Each waypoint is one collapsed row: press it to show its summary bullets and id, or use Expand all / Collapse all.
+
+The pane and band are read-only and read the queue only through `waypoints.py list --open --json`; they refresh every 60 seconds and after any Bash call that mentions `waypoints`. `/waypoints-pane` opens the pane at any width; in the terminal, a pane the mod opens by itself draws only from 144 columns wide.
+
 ## The `waypoints` command, and why output size is a feature
 
 Claude Code adds an enabled plugin's `bin/` directory to the Bash tool's `PATH`, so the public

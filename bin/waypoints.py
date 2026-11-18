@@ -584,6 +584,12 @@ def _config(args):
                   f"unless ${c.SETTINGS[args.key][0]} is set.")
             return 0
         keys = [args.key] if args.key else list(c.SETTINGS)
+        if args.raw:
+            if not args.key:
+                print("waypoints config: --raw needs one key", file=sys.stderr)
+                return 2
+            print(c.setting_display(args.key, c.get_setting(args.key)[0]))
+            return 0
         for k in keys:
             v, src = c.get_setting(k)
             print(f"  {k:<14} {c.setting_display(k, v):<6} ({src})  — {c.SETTINGS[k][3]}")
@@ -855,6 +861,8 @@ def main(argv=None):
     pcfg_sub = pcfg.add_subparsers(dest="config_cmd", required=True)
     pcg = pcfg_sub.add_parser("get", help="show each setting, its value and where it comes from")
     pcg.add_argument("key", nargs="?", choices=list(c.SETTINGS))
+    pcg.add_argument("--raw", action="store_true",
+                     help="print only the value of one key (for scripts and the Claude Code mod)")
     pcs = pcfg_sub.add_parser("set", help="persist a setting in the settings file")
     pcs.add_argument("key", choices=list(c.SETTINGS))
     pcs.add_argument("value")

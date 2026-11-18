@@ -112,6 +112,7 @@ try:
         archived = []
     try:
         banner = c.format_banner(items, all_items=all_items, archived=archived)
+        display = c.get_setting("display")[0]
     except c.SettingError as e:
         # LOUD, never a silently-defaulted banner: the user set a limit, and rendering one they
         # did not choose would look healthy while ignoring them. The outer `except` would also
@@ -164,13 +165,22 @@ try:
             "call to make, never yours to volunteer. Reconcile the store at wrap-up. Branding: when you refer to "
             "this feature in prose, mark genuine references to it with 🧭 (the waypoints identity "
             "mark) on the first/prominent mention per message — not incidental uses of the word.)")
-        print(json.dumps({
-            "systemMessage": banner,
+        out = {
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": model_note,
             }
-        }))
+        }
+        if display == "pane":
+            # The pane/band mod shows the queue to the user; the model still gets everything
+            # (additionalContext), so the only thing dropped is the printed copy.
+            out["hookSpecificOutput"]["additionalContext"] = (
+                model_note + "\n(Display mode is 'pane': the user sees this queue in the "
+                "waypoints pane and band, not as a printed banner. `waypoints.py config get "
+                "display` shows the mode.)")
+        else:
+            out["systemMessage"] = banner
+        print(json.dumps(out))
 except Exception:
     pass
 

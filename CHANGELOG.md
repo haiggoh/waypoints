@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.16.0] — 2026-11-18
+
+### Added — Display setting: banner, pane or both
+
+- **New `display` setting** with three values: `banner` (default, the printed SessionStart
+  banner exactly as before), `pane`, or `both`. Set it with
+  `waypoints.py config set display pane|banner|both`, through the interactive menu's `settings`
+  group, or with `WAYPOINTS_DISPLAY` (env > settings file > default). `config get display --raw`
+  prints just the value.
+- **`pane` mode** drops only the printed banner (`systemMessage`); the model still receives
+  the full banner as context, plus a line saying the user sees the queue in the pane.
+- **Pane and band mod** (`hooks/register.tsx`, bundled; Claude Code terminal and the desktop
+  app's Code tab, on builds that support mods): a side pane with collapsible rows (press a row
+  to show its summary bullets and id; Expand all / Collapse all) and a one-line band above
+  the prompt with the counts. Read-only: it reads the queue only through
+  `waypoints.py list --open --json`, refreshes every 60 seconds and after any Bash call that
+  mentions `waypoints`. `/waypoints-pane` opens the pane at any width; a pane the mod opens by
+  itself draws from 144 terminal columns. Builds without mod support ignore the mod; keep
+  `display` at `banner` there.
+- `portable/` rebuilt and now carries the mod and its types.
+
 ## [0.15.3] — 2026-11-16
 
 ### Fixed — pyright clean (0 errors repo-wide)

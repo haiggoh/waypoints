@@ -480,6 +480,8 @@ ACTIONS = [
          lambda items, arch: _a_setting("banner-pinned")),
         ("pin-lines",     "lines per pin reason (a number, or 'full')",
          lambda items, arch: _a_setting("pin-lines")),
+        ("display",       "where the queue shows: banner | pane | both",
+         lambda items, arch: _a_setting("display")),
     ]),
 ]
 

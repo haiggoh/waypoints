@@ -62,6 +62,8 @@ COPY_FILES = [
     "waypoints_menu.py",
     "hooks/hooks.json",
     "hooks/waypoints.py",
+    "hooks/register.tsx",
+    "types/index.d.ts",
     "scripts/waypoints.py",
     "skills/waypoints/SKILL.md",
     "commands/waypoints-gated.md",
@@ -149,6 +151,14 @@ COMPONENTS = [
      "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
      "surfaces": {"chat": False, "cowork": True, "code": True},
      "notes": "package marker copied with the root modules"},
+    {"path": "hooks/register.tsx", "kind": "mod",
+     "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
+     "surfaces": {"chat": False, "cowork": False, "code": True},
+     "notes": "Claude Code mod: pane + band drawn only when display is pane or both; finds the CLI under bin/ or scripts/; builds without mod support ignore it"},
+    {"path": "types/index.d.ts", "kind": "mod-types",
+     "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
+     "surfaces": {"chat": False, "cowork": False, "code": True},
+     "notes": "type contract for the mod's session state"},
 ]
 
 
