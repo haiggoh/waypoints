@@ -172,12 +172,12 @@ try:
             }
         }
         if display == "pane":
-            # The pane/band mod shows the queue to the user; the model still gets everything
-            # (additionalContext), so the only thing dropped is the printed copy.
+            # 0.17.0: the panel is the default UI, so the printed banner is OFF while it shows
+            # (no double render). The model still gets everything (additionalContext).
             out["hookSpecificOutput"]["additionalContext"] = (
                 model_note + "\n(Display mode is 'pane': the user sees this queue in the "
-                "waypoints pane and band, not as a printed banner. `waypoints.py config get "
-                "display` shows the mode.)")
+                "waypoints panel, not as a printed banner. `waypoints.py config get "
+                "display` shows the mode; set it to banner or both to print the banner again.)")
         else:
             out["systemMessage"] = banner
         print(json.dumps(out))

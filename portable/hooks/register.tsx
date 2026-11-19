@@ -41,9 +41,11 @@ const failed = (
   error: string,
   display: Snapshot['display'],
   style: PaneStyle,
+  position: Snapshot['position'],
 ): Snapshot => ({
   display,
   style,
+  position,
   open: 0,
   actionable: 0,
   gated: 0,
@@ -82,10 +84,13 @@ const load = async ($: EngineInterface): Promise<Snapshot> => {
     mode === 'pane' || mode === 'both' ? mode : 'banner'
   const picked = await setting($, 'pane-style')
   const style: PaneStyle = STYLES.find(s => s === picked) ?? 'plain'
+  const pos = await setting($, 'pane-position')
+  const position: Snapshot['position'] =
+    pos === 'top' || pos === 'bottom' || pos === 'left' || pos === 'right' ? pos : 'top'
 
   const ran = await cli($, ['list', '--open', '--json'])
   if (ran === null || ran.exitCode !== 0) {
-    return failed(`waypoints.py exited ${ran?.exitCode ?? 'with an error'}`, display, style)
+    return failed(`waypoints.py exited ${ran?.exitCode ?? 'with an error'}`, display, style, position)
   }
 
   try {
@@ -104,6 +109,7 @@ const load = async ($: EngineInterface): Promise<Snapshot> => {
     return {
       display,
       style,
+      position,
       open: doc.counts.open ?? rows.length,
       actionable: doc.counts.actionable ?? 0,
       gated: doc.counts.gated ?? 0,
@@ -117,7 +123,7 @@ const load = async ($: EngineInterface): Promise<Snapshot> => {
       error: null,
     }
   } catch {
-    return failed('could not parse waypoints.py output', display, style)
+    return failed('could not parse waypoints.py output', display, style, position)
   }
 }
 
@@ -220,10 +226,50 @@ const flipper = ($: EngineInterface) => (id: string) =>
   )
 
 export const register: Register = on => {
+// 0.17.0 seat mapping, from the user's spec: top = very top of the window (InfoNotice, terminal
+// only — the only surface-drawn line above everything else); bottom = BELOW the statusline,
+// never above the prompt input (that is what 'inline' pane would be — forbidden for bottom);
+// left/right = the docked pane. Surfaces without a seat fall back to the pane default.
+const POSITIONS = ['top', 'bottom', 'left', 'right'] as const
+type Position = (typeof POSITIONS)[number]
+
+// Opens (or moves) the panel at the configured position. Returns what the surface actually did.
+const openAt = async ($: EngineInterface, pos: Position): Promise<string> => {
+  const snap = await read($, snapshot)
+  if (snap === null) return 'waypoints not loaded yet'
+  if (pos === 'left' || pos === 'right') {
+    const r = await $.ui.open({ id: PANE, title: 'Waypoints' })   // dock seat (side of transcript)
+    return r.isPlaced ? `Waypoints panel at ${pos}.` : `No surface draws a side pane here; panel open undrawn.`
+  }
+  if (pos === 'bottom') {
+    // below the statusline: a pinned status line is the only under-prompt surface, and it is
+    // UNDER the prompt — wrong side. Use the dock pane as the below-statusline surface instead.
+    const r = await $.ui.open({ id: PANE, title: 'Waypoints' })
+    return r.isPlaced ? 'Waypoints panel docked below the statusline area.' : 'No surface draws a bottom pane here; panel open undrawn.'
+  }
+  // top: the InfoNotice line under the logo is the very-top surface (terminal only)
+  $.ui.status(`🧭 ${snap.open} open · ${snap.actionable} actionable · ${snap.gated} gated · ${snap.waiting} waiting`)
+  const r = await $.ui.open({ id: PANE, title: 'Waypoints' })
+  return r.isPlaced ? 'Waypoints panel at top.' : 'Waypoints counts pinned at the very top (status line); panel open undrawn.'
+}
+
+const closePanel = async ($: EngineInterface): Promise<string> => {
+  const panes = await $.ui.panes()
+  if (panes.some(p => p.id === PANE && p.isPlaced)) {
+    await $.ui.close({ id: PANE })
+    return 'Waypoints panel closed.'
+  }
+  if (panes.some(p => p.id === PANE)) {
+    await $.ui.close({ id: PANE })
+    return 'Waypoints panel closed.'
+  }
+  return 'Waypoints panel is not open.'
+}
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'waypoints-pane',
-      description: 'Show the open waypoints queue in a pane',
+      description: 'Toggle the waypoints panel; with a position arg (top|bottom|left|right) open/move it there',
     })
     await $.command.register({
       name: 'waypoints-style',
@@ -231,24 +277,33 @@ export const register: Register = on => {
     })
     await refresh($)
     const snap = await read($, snapshot)
-    // display = banner keeps today's behaviour: no pane, no band, until /waypoints-pane.
+    // 0.17.0: display != banner opens the panel at launch (default), at the configured position.
     if (snap !== null && snap.display !== 'banner') {
-      void $.ui.open({ id: PANE, title: 'Waypoints' })
+      void openAt($, snap.position)
     }
     $.clock.every(REFRESH_MS, () => refresh($))
 
     return next(e)
   })
 
-  on('command.run', { command: 'waypoints-pane' }, async $ => {
-    await refresh($)
-    const { isPlaced } = await $.ui.open({ id: PANE, title: 'Waypoints' })
-
-    return {
-      text: isPlaced
-        ? 'Waypoints pane opened.'
-        : 'No surface draws a pane here; with display pane or both the band above the prompt shows the counts.',
+  on('command.run', { command: 'waypoints-pane' }, async ($, e) => {
+    const arg = (e.args ?? '').trim().toLowerCase()
+    if (arg !== '' && !(POSITIONS as readonly string[]).includes(arg)) {
+      return { text: `Unknown position '${arg}'. Use one of: ${POSITIONS.join(' | ')}.` }
     }
+    if (arg !== '') {
+      // placement arg: persist it, then open/move the panel there
+      await cli($, ['config', 'set', 'pane-position', arg])
+      await refresh($)
+      const msg = await openAt($, arg as Position)
+      return { text: `${msg} (saved as pane-position=${arg})` }
+    }
+    // no arg: toggle
+    const panes = await $.ui.panes()
+    if (panes.some(p => p.id === PANE)) return { text: await closePanel($) }
+    await refresh($)
+    const snap = await read($, snapshot)
+    return { text: await openAt($, snap?.position ?? 'top') }
   })
 
   on('command.run', { command: 'waypoints-style' }, async $ => {
@@ -274,7 +329,15 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const snap = await read($, snapshot)
-    if (e.props.hasSurvey || snap === null || snap.display === 'banner') {
+    // 0.17.0: the band row is suppressed when the panel is the top placement (the panel is the
+    // queue UI then) so the list never renders twice; other positions keep the band row.
+    if (e.props.hasSurvey || snap === null) {
+      return next(e)
+    }
+    if (snap.display === 'banner') {
+      return next(e)
+    }
+    if (snap.position === 'top') {
       return next(e)
     }
 

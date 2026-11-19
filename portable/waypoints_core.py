@@ -1618,11 +1618,24 @@ def _parse_pin_lines(raw):
 
 
 # Where the open queue is shown. "banner" = the printed SessionStart banner (the only mode
-# before 0.16); "pane" = the Claude Code mod's side pane + band only (the banner is still handed
-# to the model, just not printed); "both" = banner and pane. Shipped default stays "banner" so
-# a Claude Code without mods, or a user who never opens the menu, sees no change.
+# before 0.16); "pane" = the Claude Code mod's panel (opened at session start) + band, with the
+# printed banner suppressed; "both" = banner and pane. 0.17.0 default is "pane": the panel is
+# the default loaded UI in Claude Code. Set display=banner to restore the old banner-only look.
 DISPLAY_MODES = ("banner", "pane", "both")
-DISPLAY_DEFAULT = "banner"
+DISPLAY_DEFAULT = "pane"
+
+
+# Where the panel sits. "top" = very top of the window (0.17.0 default); "bottom" = below the
+# statusline, never above the prompt input; "left"/"right" = docked at that side.
+PANE_POSITIONS = ("top", "bottom", "left", "right")
+PANE_POSITION_DEFAULT = "top"
+
+
+def _parse_pane_position(raw):
+    s = str(raw).strip().lower()
+    if s not in PANE_POSITIONS:
+        raise ValueError("expected one of %s, got %r" % (" | ".join(PANE_POSITIONS), raw))
+    return s
 
 
 def _parse_display(raw):
@@ -1657,9 +1670,12 @@ SETTINGS = {
     "pin-lines": ("WAYPOINTS_BANNER_PIN_LINES", BANNER_PIN_LINES, _parse_pin_lines,
                   "lines per pin reason (a number, or 'full')"),
     "display": ("WAYPOINTS_DISPLAY", DISPLAY_DEFAULT, _parse_display,
-                "where the queue shows: banner | pane | both"),
+                "where the queue shows: pane (default) | banner | both"),
     "pane-style": ("WAYPOINTS_PANE_STYLE", PANE_STYLE_DEFAULT, _parse_pane_style,
                    "collapsed-row look in the pane: " + " | ".join(PANE_STYLES)),
+    "pane-position": ("WAYPOINTS_PANE_POSITION", PANE_POSITION_DEFAULT, _parse_pane_position,
+                      "where the panel sits: top (default, very top of the window) | bottom "
+                      "(below the statusline) | left | right"),
 }
 
 

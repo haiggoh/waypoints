@@ -9,6 +9,9 @@ def _env(store, today=None):
     e = dict(os.environ, WAYPOINTS_FILE=str(store))
     if today:
         e["WAYPOINTS_TODAY"] = today
+    # 0.17.0: display defaults to 'pane', which suppresses the printed banner — banner tests pin
+    # the old mode explicitly via env so the default flip cannot silently change what they assert.
+    e.setdefault("WAYPOINTS_DISPLAY", "banner")
     return e
 
 

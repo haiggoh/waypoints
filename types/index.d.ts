@@ -2,6 +2,7 @@ export type Row = { id: string; title: string; summary: string[]; isPinned: bool
 export type Snapshot = {
   display: 'banner' | 'pane' | 'both'
   style: 'native' | 'secondary' | 'plain' | 'links' | 'dark' | 'static'
+  position: 'top' | 'bottom' | 'left' | 'right'
   open: number
   actionable: number
   gated: number

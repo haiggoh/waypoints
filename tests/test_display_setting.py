@@ -27,8 +27,9 @@ def _run(path, *args, env=None):
 
 # --- settings resolution ----------------------------------------------------------------------
 
-def test_default_display_is_banner_default():
-    assert c.get_setting("display") == ("banner", "default")
+def test_default_display_is_pane_default():
+    # 0.17.0: the panel is the default loaded UI in Claude Code; the banner is opt-in.
+    assert c.get_setting("display") == ("pane", "default")
 
 
 def test_env_display_wins_over_the_file_and_names_the_env_var(monkeypatch):
@@ -54,7 +55,7 @@ def test_set_setting_refuses_an_invalid_display_value_without_writing():
 def test_unset_setting_returns_display_to_default():
     c.set_setting("display", "both")
     c.unset_setting("display")
-    assert c.get_setting("display") == ("banner", "default")
+    assert c.get_setting("display") == ("pane", "default")
 
 
 def test_invalid_display_env_fails_loudly_naming_the_variable(monkeypatch):
@@ -88,6 +89,7 @@ def test_cli_config_set_invalid_display_exits_two():
 # --- hook -------------------------------------------------------------------------------------
 
 def test_hook_in_banner_mode_prints_system_message_and_sends_model_context():
+    c.set_setting("display", "banner")   # 0.17.0: banner is opt-in now; pin it for this test
     _run(CLI, "add", "open thing")
     r = _run(HOOK)
     out = json.loads(r.stdout)
@@ -97,6 +99,7 @@ def test_hook_in_banner_mode_prints_system_message_and_sends_model_context():
 
 
 def test_hook_in_both_mode_prints_system_message_and_sends_model_context():
+    c.set_setting("display", "both")
     c.set_setting("display", "both")
     _run(CLI, "add", "open thing")
     r = _run(HOOK)
