@@ -12,6 +12,7 @@ type Opts = {
   gated?: number
   waiting?: number
   pinned?: number
+  actionable?: number
   listFails?: boolean
 }
 
@@ -47,7 +48,10 @@ const engine = (on: On, o: Opts = {}) => {
   const pinnedItems = Array.from({ length: o.pinned ?? 0 }, (_, n) =>
     item(`p${n}`, 'do-now', { pinned: true }),
   )
-  const items = [...pinnedItems, item('a0', 'do-now'), item('a1', 'heavy'), ...gated, ...waiting]
+  const actionableItems = Array.from({ length: o.actionable ?? 2 }, (_, n) =>
+    item(`a${n}`, n === 1 ? 'heavy' : 'do-now'),
+  )
+  const items = [...pinnedItems, ...actionableItems, ...gated, ...waiting]
 
   on('process.run', (_, e) => {
     const argv = e.argv
@@ -66,7 +70,7 @@ const engine = (on: On, o: Opts = {}) => {
       const doc = {
         counts: {
           open: items.length,
-          actionable: 2,
+          actionable: actionableItems.length,
           gated: gated.length,
           waiting: waiting.length,
           untriaged: 0,
@@ -408,6 +412,22 @@ test('Expand all opens closed Actionable and every row; other groups keep their 
   await ui.press({ key: 'group-pinned-title' })
   expect(await ui.find({ text: /title p0/ })).toBeDefined()
   expect(await ui.find({ text: /point p0/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the full actionable queue renders without truncation (no cap, no fit cut)', async ($, on) => {
+  engine(on, { actionable: 60 })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = (await mountPane($ as never, 'terminal', 'dock')) as {
+    find: (q: object) => Promise<{ text: string } | undefined>
+    press: (t: { key: string }) => Promise<unknown>
+    unmount: () => Promise<void>
+  }
+  await ui.press({ key: 'group-actionable-title' }) // open the group (starts collapsed)
+  expect(await ui.find({ text: /title a0/ })).toBeDefined()
+  expect(await ui.find({ text: /title a29/ })).toBeDefined()
+  expect(await ui.find({ text: /title a59/ })).toBeDefined()
+  expect(await ui.find({ text: /and \d+ more/ })).toBeUndefined()
   await ui.unmount()
 })
 

@@ -6,7 +6,6 @@ import type { Row, Snapshot } from '../types'
 const PANE = 'waypoints'
 const STYLE_PANE = 'waypoints-style'
 const REFRESH_MS = 60_000
-const MAX_TOP = 40
 // One-line mode expands back to at least this many body rows (spec item 10).
 const MIN_ROWS = 3
 
@@ -120,8 +119,7 @@ const load = async ($: EngineInterface): Promise<Snapshot> => {
       summary: [...(i.summary ?? []), ...why],
       isPinned: i.pinned,
     })
-    const unpinned = (tier: string) =>
-      rows.filter(i => !i.pinned && i.tier === tier).slice(0, MAX_TOP)
+    const unpinned = (tier: string) => rows.filter(i => !i.pinned && i.tier === tier)
 
     return {
       display,
@@ -134,7 +132,6 @@ const load = async ($: EngineInterface): Promise<Snapshot> => {
       pinned: rows.filter(i => i.pinned).map(i => row(i)),
       top: rows
         .filter(i => !i.pinned && (i.tier === 'do-now' || i.tier === 'heavy'))
-        .slice(0, MAX_TOP)
         .map(i => row(i)),
       gatedRows: unpinned('gated').map(i => row(i, i.gate_reason ? [`gate: ${i.gate_reason}`] : [])),
       waitingRows: unpinned('waiting').map(i => row(i, i.waiting_on ? [`waiting on: ${i.waiting_on}`] : [])),
@@ -425,19 +422,9 @@ export const register: Register = on => {
       )
     }
 
-    let left = Math.max(6, (e.viewport?.rows ?? 24) - 9)
-    const fit = (rows: Row[]) => {
-      const out: Row[] = []
-      for (const r of rows) {
-        if (left - cost(r) < 0 && out.length > 0) break
-        left -= cost(r)
-        out.push(r)
-      }
-
-      return out
-    }
-    const fitted = GROUPS.map(g => ({ ...g, rows: shown.has(g.id) ? fit(members[g.id]) : [] }))
-    const hidden = visible.length - fitted.reduce((n, g) => n + g.rows.length, 0)
+    // 0.19.0: no fit cut — every row of every open group renders, and the engine's own scroll
+    // window over the pane body (SiteScroll, read-only) lets the person move through them.
+    const fitted = GROUPS.map(g => ({ ...g, rows: shown.has(g.id) ? members[g.id] : [] }))
 
     return (
       <Box flexDirection="column">
@@ -473,7 +460,6 @@ export const register: Register = on => {
             {rowList(ui, snap.style, g.rows, look, g.id)}
           </Box>
         ))}
-        {hidden > 0 && <Text dimColor>  … and {hidden} more (collapse some, or widen the pane)</Text>}
         {snap.untriaged > 0 && <Text dimColor>{snap.untriaged} untriaged</Text>}
       </Box>
     )
