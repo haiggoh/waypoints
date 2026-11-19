@@ -1,39 +1,77 @@
-"""0.17.0: the 'pane-position' setting picks where the panel sits: top | bottom | left |
-right (persisted next to the store; env WAYPOINTS_PANE_POSITION wins over file > default).
-Default is 'right' (the panel, present at launch); what each value can really do is the honest
-mapping in hooks/register.tsx and the README. Invalid values fail loudly, never silently default."""
+"""0.18.0: `pane-position` was removed (Claude Code decides where a pane sits). A settings file
+that still holds it loads fine and is IGNORED with one note line, never an error; `config
+get|set|unset pane-position` exits 2 naming the removal and writes nothing."""
 import json
+import os
+import subprocess
 
 import pytest
 
 import waypoints_core as c
 
-
-def test_default_pane_position_is_right():
-    assert c.get_setting("pane-position") == ("right", "default")
-
-
-def test_env_pane_position_wins_and_names_the_env_var(monkeypatch):
-    c.set_setting("pane-position", "left")
-    monkeypatch.setenv("WAYPOINTS_PANE_POSITION", "bottom")
-    assert c.get_setting("pane-position") == ("bottom", "env WAYPOINTS_PANE_POSITION")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CLI = os.path.join(ROOT, "bin", "waypoints.py")
 
 
-def test_set_setting_normalises_position_to_lowercase():
-    c.set_setting("pane-position", "RIGHT")
-    assert c.get_setting("pane-position") == ("right", "file")
-    with open(c.settings_path()) as f:
-        assert json.load(f) == {"pane-position": "right"}
+def _cli(*args, env=None):
+    return subprocess.run([CLI, *args], capture_output=True, text=True,
+                          env=dict(os.environ, **(env or {})), input="")
 
 
-@pytest.mark.parametrize("ok", ["top", "bottom", "left", "right", "Top", "BOTTOM"])
-def test_valid_positions_accepted(ok):
-    assert c.get_setting  # noqa
-    c.set_setting("pane-position", ok)
-    assert c.get_setting("pane-position")[0] == ok.lower()
+def _seed_settings_file(data):
+    path = c.settings_path()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(data, f)
 
 
-@pytest.mark.parametrize("bad", ["middle", "", "topleft", "up", "1"])
-def test_invalid_positions_fail_loudly(bad):
+def test_settings_file_still_holding_pane_position_loads_fine():
+    _seed_settings_file({"pane-position": "bottom", "display": "banner"})
+    # a known key still resolves from the file; the removed key does not raise on load
+    assert c.get_setting("display") == ("banner", "file")
+    assert c.removed_setting_notes() == [
+        "note: pane-position is no longer used (removed in 0.18.0) and is ignored"
+    ]
+
+
+def test_removed_setting_notes_empty_when_key_absent():
+    assert c.removed_setting_notes() == []
+
+
+def test_removed_setting_is_not_a_readable_value():
+    _seed_settings_file({"pane-position": "top"})
     with pytest.raises(c.SettingError):
-        c.set_setting("pane-position", bad)
+        c.get_setting("pane-position")
+
+
+def test_cli_config_get_pane_position_exits_2_naming_removal():
+    _seed_settings_file({"pane-position": "top"})
+    r = _cli("config", "get", "pane-position")
+    assert r.returncode == 2
+    assert "pane-position" in r.stderr and "removed in 0.18.0" in r.stderr
+
+
+def test_cli_config_set_pane_position_exits_2_and_writes_nothing():
+    _seed_settings_file({"pane-position": "top"})
+    r = _cli("config", "set", "pane-position", "left")
+    assert r.returncode == 2
+    assert "removed in 0.18.0" in r.stderr
+    with open(c.settings_path()) as f:
+        assert json.load(f) == {"pane-position": "top"}  # unchanged
+
+
+def test_cli_config_unset_pane_position_exits_2():
+    _seed_settings_file({"pane-position": "top"})
+    r = _cli("config", "unset", "pane-position")
+    assert r.returncode == 2
+    assert "removed in 0.18.0" in r.stderr
+
+
+def test_cli_config_prints_the_note_and_omits_the_removed_key_from_the_listing():
+    _seed_settings_file({"pane-position": "bottom"})
+    r = _cli("config", "get")
+    assert r.returncode == 0
+    note = "note: pane-position is no longer used (removed in 0.18.0) and is ignored"
+    assert note in r.stdout
+    # the removed key is not listed among the live settings (strip the note line first)
+    assert "pane-position" not in r.stdout.replace(note, "")

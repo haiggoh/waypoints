@@ -1,8 +1,8 @@
-"""0.17.0 pane behavior is tested on the real engine by tests/mod/register.test.tsx
-(`claude plugin test .`): honest seat mapping, toggle, group titles, one-line mode and the
-never-sit rule, on the terminal and desktop surfaces. This file keeps the cross-language
-parity check and makes the pytest gate run those mod tests, so they cannot be skipped by
-shipping with pytest alone.
+"""0.18.0: pane positions and the status-line summary were removed (Claude Code decides where
+a pane sits). The pane behavior is tested on the real engine by tests/mod/register.test.tsx
+(`claude plugin test .`): full-by-default at every seat, plain toggle, no ui.status ever. This
+file keeps a static guard (the mod source carries no position/status leftovers) and makes the
+pytest gate run those mod tests, so they cannot be skipped by shipping with pytest alone.
 """
 import os
 import re
@@ -15,12 +15,18 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MOD = os.path.join(ROOT, "hooks", "register.tsx")
 
 
-def test_positions_constant_has_exactly_the_four():
+def test_mod_source_has_no_position_or_status_leftovers():
     src = open(MOD, encoding="utf-8").read()
-    block = src.split("const POSITIONS", 1)[1].split("= [", 1)[1].split("]", 1)[0]
-    got = re.findall(r"'([a-z]+)'", block)
-    assert tuple(got) == ("top", "bottom", "left", "right")
-    assert tuple(got) == c.PANE_POSITIONS
+    for token in ["ui.status", "POSITIONS", "pane-position", "InfoNotice", "unplaced",
+                  "moveTo", "applyLine", "syncPlaced"]:
+        assert token not in src, f"register.tsx still contains {token!r}"
+    # the removal is documented in the no-argument message, not silent
+    assert "removed in 0.18.0" in src
+
+
+def test_removed_setting_is_out_of_the_table_but_known_as_removed():
+    assert "pane-position" not in c.SETTINGS
+    assert "pane-position" in c.REMOVED_SETTINGS
 
 
 def test_mod_behavior_suite_passes_on_the_engine():
@@ -36,5 +42,5 @@ def test_mod_behavior_suite_passes_on_the_engine():
     out = ran.stdout + ran.stderr
     assert ran.returncode == 0, out[-4000:]
     m = re.search(r"Ran (\d+) tests? across", out)
-    assert m and int(m.group(1)) >= 20, f"too few mod tests ran:\n{out[-2000:]}"
+    assert m and int(m.group(1)) >= 18, f"too few mod tests ran:\n{out[-2000:]}"
     assert re.search(r"\b0 fail\b", out), out[-2000:]

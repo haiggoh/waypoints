@@ -569,8 +569,17 @@ def _dashboard(store, items, show_commands=True):
 
 def _config(args):
     """`config get|set|unset` — the banner settings. Errors exit 2 naming the setting; an
-    invalid env var or file value is reported, never papered over with the default."""
+    invalid env var or file value is reported, never papered over with the default. A removed
+    setting (0.18.0: `pane-position`) exits 2 naming the removal and is never written; a
+    settings file that still holds one loads fine and earns a one-line note, never an error."""
     try:
+        for line in c.removed_setting_notes():
+            print(line)
+        if getattr(args, "key", None) in c.REMOVED_SETTINGS:
+            print("waypoints config: setting %r was %s — Claude Code decides where a pane sits; "
+                  "not a setting anymore" % (args.key, c.REMOVED_SETTINGS[args.key]),
+                  file=sys.stderr)
+            return 2
         if args.config_cmd == "set":
             v = c.set_setting(args.key, args.value)
             print(f"{args.key} = {c.setting_display(args.key, v)}  (saved to {c.settings_path()})")
@@ -860,14 +869,17 @@ def main(argv=None):
                                          "(env var > settings file > default)")
     pcfg_sub = pcfg.add_subparsers(dest="config_cmd", required=True)
     pcg = pcfg_sub.add_parser("get", help="show each setting, its value and where it comes from")
-    pcg.add_argument("key", nargs="?", choices=list(c.SETTINGS))
+    # removed keys stay in `choices` so _config can name the removal (exit 2) instead of
+    # argparse's bare "invalid choice"
+    _keys = list(c.SETTINGS) + list(c.REMOVED_SETTINGS)
+    pcg.add_argument("key", nargs="?", choices=_keys)
     pcg.add_argument("--raw", action="store_true",
                      help="print only the value of one key (for scripts and the Claude Code mod)")
     pcs = pcfg_sub.add_parser("set", help="persist a setting in the settings file")
-    pcs.add_argument("key", choices=list(c.SETTINGS))
+    pcs.add_argument("key", choices=_keys)
     pcs.add_argument("value")
     pcu = pcfg_sub.add_parser("unset", help="drop a setting from the file (back to the default)")
-    pcu.add_argument("key", choices=list(c.SETTINGS))
+    pcu.add_argument("key", choices=_keys)
     args = p.parse_args(argv)
 
     # --since/--age (list + search): resolve once, loud failure on malformed values.

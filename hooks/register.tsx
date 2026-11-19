@@ -20,17 +20,9 @@ const STYLES: readonly PaneStyle[] = [
   'static',
 ]
 
-// 0.17.0 honest seat mapping. A mod cannot choose where a pane sits (Claude Code 2.1.327:
-// `$.ui.open` takes no position; the surface seats it `dock` beside the transcript in the
-// fullscreen layout from 110 columns, `inline` above the prompt otherwise, or as a desktop
-// `widget`). So: left/right open the pane wherever the surface seats it (the engine picks the
-// dock's side); top/bottom draw a one-line summary instead of a pane: under the logo notice
-// (top, terminal, when the engine shows one) or under the prompt via `$.ui.status`. The pane is
-// never drawn as a list above the prompt: seated inline it shows only its one-line form until
-// the person clicks it (the never-sit rule).
-const POSITIONS = ['top', 'bottom', 'left', 'right'] as const
-type Position = (typeof POSITIONS)[number]
-
+// 0.18.0: positions are gone — Claude Code decides where a pane sits (docked beside the
+// transcript in the fullscreen layout from 110 columns, inline above the prompt otherwise,
+// or a desktop widget). The mod never writes a status line; the pane opens full at every seat.
 type GroupId = 'actionable' | 'gated' | 'waiting'
 const GROUPS: readonly { id: GroupId; symbol: string; label: string }[] = [
   { id: 'actionable', symbol: '▶', label: 'Actionable' },
@@ -42,11 +34,6 @@ const snapshot = atom({ plugin: 'waypoints', key: 'snapshot' } as const, null)
 const expanded = atom({ plugin: 'waypoints', key: 'expanded' } as const, [])
 const groups = atom({ plugin: 'waypoints', key: 'groups' } as const, ['actionable'])
 const compact = atom({ plugin: 'waypoints', key: 'compact' } as const, null)
-const unplaced = atom({ plugin: 'waypoints', key: 'unplaced' } as const, false)
-
-// The first InfoNotice text seen this load: `top` draws its line under that one notice only.
-// A module variable on purpose — it starts over on a reload, as the notices are redrawn then.
-let noticeText: string | null = null
 
 type Item = {
   id: string
@@ -70,11 +57,9 @@ const failed = (
   error: string,
   display: Snapshot['display'],
   style: PaneStyle,
-  position: Snapshot['position'],
 ): Snapshot => ({
   display,
   style,
-  position,
   open: 0,
   actionable: 0,
   gated: 0,
@@ -115,12 +100,10 @@ const load = async ($: EngineInterface): Promise<Snapshot> => {
     mode === 'pane' || mode === 'both' ? mode : 'banner'
   const picked = await setting($, 'pane-style')
   const style: PaneStyle = STYLES.find(s => s === picked) ?? 'plain'
-  const pos = await setting($, 'pane-position')
-  const position: Position = POSITIONS.find(p => p === pos) ?? 'right'
 
   const ran = await cli($, ['list', '--open', '--json'])
   if (ran === null || ran.exitCode !== 0) {
-    return failed(`waypoints.py exited ${ran?.exitCode ?? 'with an error'}`, display, style, position)
+    return failed(`waypoints.py exited ${ran?.exitCode ?? 'with an error'}`, display, style)
   }
 
   try {
@@ -141,7 +124,6 @@ const load = async ($: EngineInterface): Promise<Snapshot> => {
     return {
       display,
       style,
-      position,
       open: doc.counts.open ?? rows.length,
       actionable: doc.counts.actionable ?? 0,
       gated: doc.counts.gated ?? 0,
@@ -157,57 +139,19 @@ const load = async ($: EngineInterface): Promise<Snapshot> => {
       error: null,
     }
   } catch {
-    return failed('could not parse waypoints.py output', display, style, position)
+    return failed('could not parse waypoints.py output', display, style)
   }
 }
 
-// The status-line look: the one line the panel shrinks to, and the top/bottom summary.
+// The one-line look the panel shrinks to (and the desktop widget's glance line).
 const summaryText = (snap: Snapshot) =>
   snap.error !== null
     ? `waypoints: ${snap.error}`
     : `🧭 ${snap.open} open · ▶ ${snap.actionable} · ⛔ ${snap.gated} · ⏳ ${snap.waiting}`
 
-// Which one-line surface (if any) stands in for the pane, kept current on every refresh.
-// Returns what it did, in the words /waypoints-pane reports.
-const applyLine = async ($: EngineInterface): Promise<string> => {
-  const snap = await read($, snapshot)
-  if (snap === null || snap.display === 'banner') {
-    $.ui.status(undefined)
-    return 'waypoints not loaded yet'
-  }
-  const isLine = snap.position === 'top' || snap.position === 'bottom'
-  if (!isLine && !(await read($, unplaced))) {
-    $.ui.status(undefined)
-    return ''
-  }
-  if (snap.position === 'top' && noticeText !== null) {
-    $.ui.status(undefined)
-    return 'One-line summary under the logo notice.'
-  }
-  $.ui.status(summaryText(snap))
-  if (snap.position === 'top') {
-    return 'No logo notice this session; one-line summary shown under the prompt instead.'
-  }
-  if (snap.position === 'bottom') {
-    return 'One-line summary under the prompt (a mod cannot place anything below the statusline).'
-  }
-  return 'One-line summary shown under the prompt.'
-}
-
-const syncPlaced = async ($: EngineInterface) => {
-  const panes = await $.ui.panes()
-  const mine = panes.find(p => p.id === PANE)
-  const isUnplaced = mine !== undefined && !mine.isPlaced
-  if ((await read($, unplaced)) !== isUnplaced) {
-    await update($, unplaced, () => isUnplaced)
-  }
-}
-
 const refresh = async ($: EngineInterface) => {
   const next = await load($)
   await update($, snapshot, () => next)
-  await syncPlaced($)
-  await applyLine($)
 }
 
 const paneOpen = ($: EngineInterface, rows?: number) =>
@@ -216,31 +160,19 @@ const paneOpen = ($: EngineInterface, rows?: number) =>
 // Opens the full pane wherever the surface seats it, and says honestly what that seat is.
 const openPane = async ($: EngineInterface, isFullscreen: boolean | undefined): Promise<string> => {
   const r = await paneOpen($)
-  await update($, unplaced, () => !r.isPlaced)
-  const line = await applyLine($)
   if (!r.isPlaced) {
-    return `No surface draws the panel here yet${'reason' in r && r.reason ? ` (${r.reason})` : ''}. ${line}`
+    return `No surface draws the panel here yet${'reason' in r && r.reason ? ` (${r.reason})` : ''}.`
   }
   return isFullscreen === true
-    ? 'Waypoints panel docked beside the transcript — the engine picks the side; left and right behave the same.'
-    : 'This layout has no side dock; the panel shows as a one-line row above the prompt (click it to expand).'
+    ? 'Waypoints panel docked beside the transcript (the engine picks the side).'
+    : 'Waypoints panel opened above the prompt.'
 }
 
 const closePane = async ($: EngineInterface): Promise<boolean> => {
   const panes = await $.ui.panes()
   if (!panes.some(p => p.id === PANE)) return false
   await $.ui.close({ id: PANE })
-  await update($, unplaced, () => false)
   return true
-}
-
-// Moves the panel to a position: left/right = the pane; top/bottom = a one-line summary.
-const moveTo = async ($: EngineInterface, pos: Position, isFullscreen: boolean | undefined) => {
-  if (pos === 'left' || pos === 'right') {
-    return openPane($, isFullscreen)
-  }
-  await closePane($)
-  return applyLine($)
 }
 
 const setCompact = async ($: EngineInterface, isCompact: boolean, fullRows: number) => {
@@ -351,8 +283,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'waypoints-pane',
-      description:
-        'Toggle the waypoints panel; with top|bottom|left|right move it there (left/right = the panel, top/bottom = a one-line summary)',
+      description: 'Toggle the waypoints panel (Claude Code decides where it sits)',
     })
     await $.command.register({
       name: 'waypoints-style',
@@ -360,9 +291,9 @@ export const register: Register = on => {
     })
     await refresh($)
     const snap = await read($, snapshot)
-    // 0.17.0: display != banner shows the queue at launch, at the configured position.
+    // display != banner shows the queue at launch, wherever the surface seats the pane.
     if (snap !== null && snap.display !== 'banner') {
-      await moveTo($, snap.position, undefined)
+      await openPane($, undefined)
     }
     $.clock.every(REFRESH_MS, () => refresh($))
 
@@ -370,22 +301,17 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'waypoints-pane' }, async ($, e) => {
-    const arg = (e.args ?? '').trim().toLowerCase()
-    const isFullscreen = e.presentation?.isFullscreen
+    const arg = (e.args ?? '').trim()
+    // 0.18.0: positions are gone — any argument is refused and NOTHING is saved.
     if (arg !== '') {
-      const pos = POSITIONS.find(p => p === arg)
-      if (pos === undefined) {
-        return { text: `Unknown position '${arg}'. Use one of: ${POSITIONS.join(' | ')}.` }
+      return {
+        text: '/waypoints-pane takes no argument (positions were removed in 0.18.0: '
+          + 'Claude Code decides where a pane sits).',
       }
-      await cli($, ['config', 'set', 'pane-position', pos])
-      await refresh($)
-      const msg = await moveTo($, pos, isFullscreen)
-
-      return { text: `${msg} (saved as pane-position=${pos})` }
     }
-    // No arg: toggle the full panel, at whatever seat the surface gives, for every position.
+    const isFullscreen = e.presentation?.isFullscreen
+    // No arg: toggle the full panel, at whatever seat the surface gives.
     if (await closePane($)) {
-      await applyLine($)
       return { text: 'Waypoints panel closed.' }
     }
     await refresh($)
@@ -412,32 +338,6 @@ export const register: Register = on => {
     }
 
     return ran
-  })
-
-  // `top`: the one-line summary sits under the first logo notice (terminal only).
-  on('ui.render', { component: 'InfoNotice' }, async ($, e, next) => {
-    const drawn = await next(e)
-    if (noticeText === null) {
-      noticeText = e.props.text
-      void applyLine($)
-    }
-    const snap = await read($, snapshot)
-    if (
-      snap === null ||
-      snap.display === 'banner' ||
-      snap.position !== 'top' ||
-      e.props.text !== noticeText
-    ) {
-      return drawn
-    }
-    const { Box, Text } = $.ui.resolve(e)
-
-    return (
-      <Box flexDirection="column">
-        {drawn}
-        <Text dimColor>{summaryText(snap)}</Text>
-      </Box>
-    )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -481,9 +381,9 @@ export const register: Register = on => {
     const visible = [...snap.pinned, ...GROUPS.flatMap(g => (shown.has(g.id) ? members[g.id] : []))]
     const fullRows = 3 + GROUPS.length + visible.reduce((n, r) => n + cost(r), 0)
 
-    // One-line mode: chosen by the person, or (left to the seat) whenever the pane is not
-    // docked — inline above the prompt it is never a list until the person clicks it.
-    const isCompact = (await read($, compact)) ?? placement !== 'dock'
+    // One-line mode: only when the person collapses it. 0.18.0: the pane ALWAYS opens full
+    // at every seat; null no longer follows the seat.
+    const isCompact = (await read($, compact)) ?? false
     if (isCompact) {
       return (
         <Button key="one-line" plain dimColor onPress={() => setCompact($, false, fullRows)}>

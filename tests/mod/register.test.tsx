@@ -1,11 +1,13 @@
 // Behavior tests for hooks/register.tsx on the real engine (`claude plugin test .`).
 // Every hook a test adds with `on` stands for the engine beneath the plugin.
+// 0.18.0: the status-line summary and every pane position are GONE. `/waypoints-pane` is a
+// plain open/close toggle, the pane opens FULL wherever the surface seats it, and the mod
+// never calls `$.ui.status` — Claude Code decides where a pane sits.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 type Opts = {
   display?: string
-  position?: string
   isPlaced?: boolean
   gated?: number
   waiting?: number
@@ -34,7 +36,6 @@ const engine = (on: On, o: Opts = {}) => {
   const settings: Record<string, string> = {
     display: o.display ?? 'pane',
     'pane-style': 'plain',
-    'pane-position': o.position ?? 'top',
   }
   const gated = Array.from({ length: o.gated ?? 2 }, (_, n) =>
     item(`g${n}`, 'gated', { gate_reason: `needs ${n}` }),
@@ -134,113 +135,72 @@ const pane = (
     origin: { kind: 'composer' },
     presentation: { isFullscreen, columns: isFullscreen ? 160 : 100 },
   } as never)
-const lastStatus = (rec: { status: (string | undefined)[] }) => rec.status[rec.status.length - 1]
 
 // ---- launch ---------------------------------------------------------------------------
 
-test('display=pane, position=left opens the pane at launch', async ($, on) => {
-  const rec = engine(on, { position: 'left' })
+test('display=pane opens the pane at launch', async ($, on) => {
+  const rec = engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   expect(rec.opens.some(o => o.id === 'waypoints')).toBe(true)
 })
 
-test('display=banner opens nothing and sets no summary line', async ($, on) => {
-  const rec = engine(on, { display: 'banner', position: 'left' })
+test('display=banner opens nothing and sets no status line', async ($, on) => {
+  const rec = engine(on, { display: 'banner' })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   expect(rec.opens.length).toBe(0)
-  expect(rec.status.every(s => s === undefined)).toBe(true)
+  expect(rec.status.length).toBe(0)
 })
 
-// ---- honest seat mapping ----------------------------------------------------------------
+// ---- no status-line summary, ever (0.18.0 removed it) ----------------------------------
 
-test('bottom: no pane, the one-line summary under the prompt', async ($, on) => {
-  const rec = engine(on, { position: 'bottom' })
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  expect(rec.opens.length).toBe(0)
-  expect(lastStatus(rec)).toBe('🧭 5 open · ▶ 2 · ⛔ 2 · ⏳ 1')
-})
-
-test('top with no logo notice: the summary falls back to under the prompt', async ($, on) => {
-  const rec = engine(on, { position: 'top' })
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  expect(rec.opens.length).toBe(0)
-  expect(lastStatus(rec)).toBe('🧭 5 open · ▶ 2 · ⛔ 2 · ⏳ 1')
-  const r = await pane($ as never, 'top')
-  expect(r.text ?? '').toContain('No logo notice this session')
-})
-
-test('top with a logo notice: the summary is drawn under it and the status line cleared', async ($, on) => {
-  const rec = engine(on, { position: 'top' })
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  const ui = await $.ui.mount({
-    plugin: 'waypoints',
-    surface: 'terminal',
-    component: 'InfoNotice',
-    props: { text: 'model: opus', command: null },
-  } as never)
-  expect(await (ui as { find: (q: object) => Promise<{ text: string } | undefined> }).find({ type: 'Text', text: /🧭 5 open/ })).toBeDefined()
-  expect(lastStatus(rec)).toBeUndefined()
-})
-
-test('/waypoints-pane bottom persists, closes an open pane, and says what it did', async ($, on) => {
-  const rec = engine(on, { position: 'left' })
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  const r = await pane($ as never, 'bottom')
-  expect(rec.sets).toContainEqual(['pane-position', 'bottom'])
-  expect(rec.closes).toBe(1)
-  expect(r.text ?? '').toContain('cannot place anything below the statusline')
-  expect(r.text ?? '').toContain('saved as pane-position=bottom')
-})
-
-test('/waypoints-pane left and right open the pane and say the layout has no side dock', async ($, on) => {
-  const rec = engine(on, { position: 'bottom' })
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  for (const pos of ['left', 'right']) {
-    const r = await pane($ as never, pos)
-    expect(r.text ?? '').toMatch(/no side dock|engine picks the side/)
-  }
-  expect(rec.opens.filter(o => o.id === 'waypoints').length).toBe(2)
-})
-
-test('/waypoints-pane left in the fullscreen layout says the engine picks the dock side', async ($, on) => {
-  engine(on, { position: 'bottom' })
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  const r = await pane($ as never, 'left', true)
-  expect(r.text ?? '').toContain('engine picks the side; left and right behave the same')
-})
-
-test('unknown position is refused and nothing is saved', async ($, on) => {
+test('the mod never calls ui.status (launch, toggle, refresh)', async ($, on) => {
   const rec = engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  const r = await pane($ as never, 'middle')
-  expect(r.text).toBe("Unknown position 'middle'. Use one of: top | bottom | left | right.")
-  expect(rec.sets.length).toBe(0)
+  await pane($ as never) // toggle it shut
+  await pane($ as never) // toggle it open
+  await pane($ as never, 'left') // an argument is refused, but must still set no status
+  expect(rec.status.length).toBe(0)
 })
 
-for (const position of ['top', 'bottom', 'left', 'right']) {
-  test(`/waypoints-pane with no arg toggles the full pane (position=${position})`, async ($, on) => {
-    const rec = engine(on, { position })
-    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-    const wasOpen = rec.panes.some(p => p.id === 'waypoints')
-    const first = await pane($ as never)
-    expect(rec.panes.some(p => p.id === 'waypoints')).toBe(!wasOpen)
-    const second = await pane($ as never)
-    expect(rec.panes.some(p => p.id === 'waypoints')).toBe(wasOpen)
-    expect([first.text, second.text]).toContain('Waypoints panel closed.')
-  })
-}
+// ---- /waypoints-pane is a plain toggle; any argument is refused ------------------------
 
-test('a pane no surface places leaves the queue visible as the summary line', async ($, on) => {
-  const rec = engine(on, { position: 'left', isPlaced: false })
+test('/waypoints-pane with any argument is refused and nothing is saved', async ($, on) => {
+  const rec = engine(on, { display: 'banner' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const arg of ['bottom', 'top', 'left', 'right', 'middle', 'Bottom']) {
+    const r = await pane($ as never, arg)
+    expect(r.text).toBe('/waypoints-pane takes no argument (positions were removed in 0.18.0: '
+      + 'Claude Code decides where a pane sits).')
+  }
+  expect(rec.sets.length).toBe(0)
+  expect(rec.opens.length).toBe(0)
+})
+
+test('/waypoints-pane with no argument toggles the panel', async ($, on) => {
+  const rec = engine(on, { display: 'banner' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const first = await pane($ as never)
+  expect(rec.panes.some(p => p.id === 'waypoints')).toBe(true)
+  const second = await pane($ as never)
+  expect(rec.panes.some(p => p.id === 'waypoints')).toBe(false)
+  expect(second.text).toBe('Waypoints panel closed.')
+  expect(first.text).not.toBe('Waypoints panel closed.')
+})
+
+test('a pane no surface places says so, and nothing else stands in', async ($, on) => {
+  const rec = engine(on, { display: 'banner', isPlaced: false })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(lastStatus(rec)).toBe('🧭 5 open · ▶ 2 · ⛔ 2 · ⏳ 1')
+  const r = await pane($ as never)
+  expect(r.text ?? '').toContain('No surface draws the panel here yet')
+  expect(r.text ?? '').toContain('too narrow')
+  expect(rec.status.length).toBe(0)
 })
 
 // ---- groups (spec 7-9), identical on terminal and desktop --------------------------------
 
 for (const surface of SURFACES) {
   test(`group titles collapse and expand (${surface})`, async ($, on) => {
-    engine(on, { position: 'left' })
+    engine(on)
     await $.session.start({ cwd: '/', surface, isInteractive: true })
     const ui = (await mountPane($ as never, surface, 'dock')) as {
       find: (q: object) => Promise<{ text: string } | undefined>
@@ -263,7 +223,7 @@ for (const surface of SURFACES) {
   })
 
   test(`empty gated/waiting groups still show (0) and expand to nothing (${surface})`, async ($, on) => {
-    engine(on, { position: 'left', gated: 0, waiting: 0 })
+    engine(on, { gated: 0, waiting: 0 })
     await $.session.start({ cwd: '/', surface, isInteractive: true })
     const ui = (await mountPane($ as never, surface, 'dock')) as {
       find: (q: object) => Promise<{ text: string } | undefined>
@@ -277,60 +237,58 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 
-  // ---- one-line mode (spec 10) + never-sit ------------------------------------------------
+  // ---- the pane opens FULL by default at every seat (0.18.0) ----------------------------
 
-  test(`inline seat shows only the one-line summary until clicked (${surface})`, async ($, on) => {
-    const rec = engine(on, { position: 'left' })
+  test(`inline and dock seats both render FULL by default (${surface})`, async ($, on) => {
+    const rec = engine(on)
     await $.session.start({ cwd: '/', surface, isInteractive: true })
-    const ui = (await mountPane($ as never, surface, 'inline')) as {
+    for (const placement of ['inline', 'dock'] as const) {
+      const ui = (await mountPane($ as never, surface, placement)) as {
+        find: (q: object) => Promise<{ text: string } | undefined>
+        unmount: () => Promise<void>
+      }
+      // full: the collapse button and group titles are both there, the one-line row is not
+      expect(await ui.find({ key: 'one-line' })).toBeUndefined()
+      expect(await ui.find({ key: 'collapse-one-line' })).toBeDefined()
+      expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▾ ▶ Actionable (2)')
+      await ui.unmount()
+    }
+    // never collapsed at launch: every open asked for the auto height, not one row
+    expect(rec.opens.filter(o => o.id === 'waypoints').every(o => Number(o.rows ?? 0) !== 1)).toBe(true)
+  })
+
+  test(`collapse to one line then press expands back to full (${surface})`, async ($, on) => {
+    const rec = engine(on)
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    const ui = (await mountPane($ as never, surface, 'dock')) as {
       find: (q: object) => Promise<{ text: string } | undefined>
-      findAll: (q: object) => Promise<unknown[]>
       press: (t: { key: string }) => Promise<unknown>
       unmount: () => Promise<void>
     }
+    await ui.press({ key: 'collapse-one-line' })
     expect((await ui.find({ key: 'one-line' }))?.text).toBe('🧭 5 open · ▶ 2 · ⛔ 2 · ⏳ 1')
     expect(await ui.find({ key: 'group-actionable-title' })).toBeUndefined()
-    expect((await ui.findAll({ type: 'Button' })).length).toBe(1)
-    await ui.press({ key: 'one-line' })
-    const reopen = rec.opens[rec.opens.length - 1] ?? {}
-    expect(reopen.id).toBe('waypoints')
-    expect(Number(reopen.rows)).toBeGreaterThanOrEqual(3)
-    expect(await ui.find({ key: 'group-actionable-title' })).toBeDefined()
-    await ui.press({ key: 'collapse-one-line' })
     expect(rec.opens[rec.opens.length - 1]?.rows).toBe(1)
-    expect(await ui.find({ key: 'one-line' })).toBeDefined()
+    await ui.press({ key: 'one-line' })
+    expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▾ ▶ Actionable (2)')
+    expect(Number(rec.opens[rec.opens.length - 1]?.rows)).toBeGreaterThanOrEqual(3)
     await ui.unmount()
   })
 
-  test(`dock seat shows the full pane by default (${surface})`, async ($, on) => {
-    engine(on, { position: 'left' })
+  test(`a failed CLI read shows the error in the pane (${surface})`, async ($, on) => {
+    engine(on, { listFails: true })
     await $.session.start({ cwd: '/', surface, isInteractive: true })
     const ui = (await mountPane($ as never, surface, 'dock')) as {
       find: (q: object) => Promise<{ text: string } | undefined>
       unmount: () => Promise<void>
     }
-    expect(await ui.find({ key: 'one-line' })).toBeUndefined()
-    expect(await ui.find({ key: 'collapse-one-line' })).toBeDefined()
+    expect(await ui.find({ text: /waypoints: waypoints\.py exited 3/ })).toBeDefined()
     await ui.unmount()
-  })
-
-  test(`a failed CLI read shows the error in both forms (${surface})`, async ($, on) => {
-    engine(on, { position: 'left', listFails: true })
-    await $.session.start({ cwd: '/', surface, isInteractive: true })
-    const inline = (await mountPane($ as never, surface, 'inline')) as {
-      find: (q: object) => Promise<{ text: string } | undefined>
-      press: (t: { key: string }) => Promise<unknown>
-      unmount: () => Promise<void>
-    }
-    expect((await inline.find({ key: 'one-line' }))?.text).toBe('waypoints: waypoints.py exited 3')
-    await inline.press({ key: 'one-line' })
-    expect(await inline.find({ text: /waypoints: waypoints.py exited 3/ })).toBeDefined()
-    await inline.unmount()
   })
 }
 
 test('a desktop widget draws a glance line and no buttons', async ($, on) => {
-  engine(on, { position: 'left' })
+  engine(on)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = (await mountPane($ as never, 'desktop', 'widget')) as {
     find: (q: object) => Promise<{ text: string } | undefined>
@@ -343,7 +301,7 @@ test('a desktop widget draws a glance line and no buttons', async ($, on) => {
 })
 
 test('state stored by 0.16 (only `expanded`) still renders with the new defaults', async ($, on) => {
-  engine(on, { position: 'left' })
+  engine(on)
   // Only the 0.16 key is seeded; every other key reaches the kit's own state store.
   on('state.get', (_, e, next) =>
     (e as { key?: string }).key === 'expanded'
@@ -358,4 +316,3 @@ test('state stored by 0.16 (only `expanded`) still renders with the new defaults
   expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▾ ▶ Actionable (2)')
   await ui.unmount()
 })
-

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.18.0] — 2026-11-19
+
+### Removed — the status-line summary and every pane position
+- **The status-line summary is gone.** The mod never writes a status line anymore: no one-line band under the prompt, none under the logo notice (0.17.0's `top`/`bottom` positions drew them).
+- **`pane-position` is removed entirely** — the setting, the `WAYPOINTS_PANE_POSITION` env var, and the `/waypoints-pane <position>` argument. Claude Code does not let a mod choose where a pane sits, so the argument was a no-op and the setting only an honest mapping; both are dropped. `/waypoints-pane` is now a plain open/close toggle and takes no argument — any argument is refused with a message and nothing is saved. A settings file that still holds `pane-position` loads fine and is ignored with a one-line note (`note: pane-position is no longer used (removed in 0.18.0) and is ignored`); `waypoints.py config get|set|unset pane-position` exits 2 naming the removal.
+- The mod's `InfoNotice` hook and the unplaced-summary fallback are removed with them; an unplaced pane just waits and `/waypoints-pane` says `No surface draws the panel here yet (<reason>).`
+
+### Changed — the pane always opens full
+- **One-line mode is no longer automatic.** The panel opens FULL at every seat (docked beside the transcript in the fullscreen layout, inline above the prompt, or a desktop widget). `Collapse to one line` still shrinks it to one row and pressing that row expands it back (at least 3 rows); the desktop widget still shows its glance line. In 0.17.0 an inline seat started as that one line.
+
+### Tests and tooling
+- `tests/mod/register.test.tsx` rewritten for 0.18.0: 18 behavior tests on the real engine (`claude plugin test .`) — no status-line call ever (launch, toggle, refresh), `/waypoints-pane <arg>` refused with nothing saved, the pane full by default at both inline and dock seats, collapse → one line → expand (rows ≥ 3), widget glance line. Mutation-checked: forcing the compact default to `true` turns the opens-full tests red.
+- `tests/test_pane_position_setting.py` now covers the ignored-key note and the exit-2 removal; `tests/test_panel_positions.py` keeps a static no-leftovers guard on the mod source plus the mod-suite parity floor.
+
 ## [0.17.0] — 2026-11-19
 
 ### Changed — the panel is the default; the banner is off while it shows
