@@ -1,8 +1,9 @@
-"""0.18.0: pane positions and the status-line summary were removed (Claude Code decides where
-a pane sits). The pane behavior is tested on the real engine by tests/mod/register.test.tsx
-(`claude plugin test .`): full-by-default at every seat, plain toggle, no ui.status ever. This
-file keeps a static guard (the mod source carries no position/status leftovers) and makes the
-pytest gate run those mod tests, so they cannot be skipped by shipping with pytest alone.
+"""0.18.0 removed pane positions and the status-line summary; 0.19.0 made the pane seat-driven
+and opt-in in window mode. The pane behavior is tested on the real engine by
+tests/mod/register.test.tsx (`claude plugin test .`): seat-driven launch, seat-dependent
+height, four accordion groups, no truncation, plain toggle, no ui.status ever. This file keeps
+a static guard (the mod source carries no position/status leftovers) and makes the pytest gate
+run those mod tests, so they cannot be skipped by shipping with pytest alone.
 """
 import os
 import re
@@ -42,5 +43,5 @@ def test_mod_behavior_suite_passes_on_the_engine():
     out = ran.stdout + ran.stderr
     assert ran.returncode == 0, out[-4000:]
     m = re.search(r"Ran (\d+) tests? across", out)
-    assert m and int(m.group(1)) >= 18, f"too few mod tests ran:\n{out[-2000:]}"
+    assert m and int(m.group(1)) >= 27, f"too few mod tests ran:\n{out[-2000:]}"
     assert re.search(r"\b0 fail\b", out), out[-2000:]
