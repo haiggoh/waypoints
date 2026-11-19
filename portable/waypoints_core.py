@@ -1618,11 +1618,13 @@ def _parse_pin_lines(raw):
 
 
 # Where the open queue is shown. "banner" = the printed SessionStart banner (the only mode
-# before 0.16); "pane" = the Claude Code mod's panel (opened at session start) + band, with the
-# printed banner suppressed; "both" = banner and pane. 0.17.0 default is "pane": the panel is
-# the default loaded UI in Claude Code. Set display=banner to restore the old banner-only look.
+# before 0.16, and the default again since 0.19.0: in window mode the pane is opt-in only, so
+# the banner is what shows the queue there); "pane" = banner off, the Claude Code mod's panel
+# opens at launch at every seat (collapsed one line in window mode); "both" = banner and pane.
+# In the fullscreen layout the panel opens at launch in every mode (docked beside the
+# transcript) — the mod decides by the seat, not this setting.
 DISPLAY_MODES = ("banner", "pane", "both")
-DISPLAY_DEFAULT = "pane"
+DISPLAY_DEFAULT = "banner"
 
 
 # Settings removed in 0.18.0. A stored value is IGNORED (with a one-line note on `config`),
@@ -1665,7 +1667,7 @@ SETTINGS = {
     "pin-lines": ("WAYPOINTS_BANNER_PIN_LINES", BANNER_PIN_LINES, _parse_pin_lines,
                   "lines per pin reason (a number, or 'full')"),
     "display": ("WAYPOINTS_DISPLAY", DISPLAY_DEFAULT, _parse_display,
-                "where the queue shows: pane (default) | banner | both"),
+                "where the queue shows: banner (default) | pane (banner off; the panel) | both"),
     "pane-style": ("WAYPOINTS_PANE_STYLE", PANE_STYLE_DEFAULT, _parse_pane_style,
                    "collapsed-row look in the pane: " + " | ".join(PANE_STYLES)),
 }

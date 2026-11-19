@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.19.0] — 2026-11-19
+
+### Changed — the pane is opt-in where it is obtrusive; the banner is the default again
+- **`display` defaults back to `banner`** (0.17.0 had made `pane` the default). In window mode the pane is now opt-in: it stays closed at launch and the printed banner carries the queue. In the fullscreen layout the docked panel still opens at launch in every `display` mode — the redundancy there is accepted.
+- **Seat-driven launch**: every `display` mode opens the pane at session start to learn its seat; under `display=banner` the first render closes it again where the surface will not dock it (inline above the prompt, desktop widget). `display=pane`/`both` keep it at every seat. A manual `/waypoints-pane` open never auto-closes.
+- **The inline pane opens collapsed**: the one-line row (`🧭 N open · ▶ A · ⛔ G · ⏳ W`) is the default above the prompt — full only at the dock seat. `Collapse to one line` / press-to-expand (≥ 3 rows) unchanged.
+- **The banner carries a switch hint line**: `pane: /waypoints-pane · banner off: ask Claude to set display=pane` (no console command in the user-visible banner, per the standing UX rule).
+
+### Changed — accordion groups, and the full queue
+- **Pinned waypoints are now a group** (`▸ 📌 Pinned (N)`), alongside Actionable, Gated, Waiting. **All four groups start collapsed.** `Expand all` opens every row in every group and opens Actionable if closed (never a visible no-op); other groups keep their state, their rows carry the expanded state. `Collapse all` closes rows only, touches no group.
+- **No truncation**: the 40-row cap and the viewport-height cut are gone; every row of every open group renders and the pane body scrolls (the engine owns the scroll window). No more "… and N more".
+
+### Tests and tooling
+- `tests/mod/register.test.tsx`: 27 engine tests — seat-driven launch (auto-open + first-render close under banner in window mode and on the desktop widget; dock stays; manual open stays), seat-dependent height (dock full / inline one-line), four collapsed groups incl. Pinned, Expand-all/Collapse-all semantics, and a 60-item no-truncation test. Mutation-checked at each step (launch close, compact seat default, accordion handlers, 40-cap all turn their tests red when reverted).
+- `tests/test_banner_display_gating.py` / `test_display_setting.py`: default is `banner`; the banner carries the hint line (and no console command).
+
 ## [0.18.0] — 2026-11-19
 
 ### Removed — the status-line summary and every pane position

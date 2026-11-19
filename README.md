@@ -197,27 +197,27 @@ single-repo banners render exactly as before.
 
 ## Display: banner, pane or both
 
-`display` selects where the open queue appears:
+`display` selects where the open queue appears (default since 0.19.0: `banner`):
 
-- `pane` — default since 0.17.0; the queue shows in the Claude Code mod's panel (see Placement below) and the printed banner is off; the model still receives the full banner as context.
-- `banner` — the SessionStart banner prints exactly as before, and the mod shows nothing. Restore it with `waypoints.py config set display banner`.
-- `both` — banner and pane.
+- `banner` — the SessionStart banner prints (with a one-line hint on how to switch) and the mod's panel auto-opens at launch only where the surface docks it (fullscreen; see Placement below). In window mode the panel is opt-in: `/waypoints-pane`.
+- `pane` — banner off; the panel opens at launch at every seat (fullscreen dock, or the collapsed one-line row above the prompt in window mode). The model still receives the full queue as context either way.
+- `both` — banner and the panel at every seat.
 
 Set it with `waypoints.py config set display pane|banner|both`, in the interactive menu's `settings` group, or via `WAYPOINTS_DISPLAY`. Resolution order is `WAYPOINTS_DISPLAY` > settings file > default. `waypoints.py config get display --raw` prints just the current value.
 
 The panel comes from the Claude Code mod bundled in the plugin (`hooks/register.tsx`) and works in Claude Code (terminal) and the Claude desktop app's Code tab on builds that support mods; on builds without mod support, set `display` to `banner`. The panel and the terminal/desktop render are one implementation, so they behave identically.
 
-**Groups.** Below any pinned items, the panel has three collapsible group titles — `▶ Actionable (N)` (open by default), `⛔ Gated (N)` and `⏳ Waiting (N)`. Press a title to expand or collapse it. Inside a group each waypoint is one collapsed row: press it to show its summary bullets (plus its gate reason or what it waits on) and id, or use Expand all / Collapse all.
+**Groups.** The panel has four collapsible group titles — `📌 Pinned (N)`, `▶ Actionable (N)`, `⛔ Gated (N)` and `⏳ Waiting (N)` — and all four start collapsed. Press a title to expand or collapse it. Inside a group each waypoint is one collapsed row: press it to show its summary bullets (plus its gate reason or what it waits on) and id. `Expand all` opens every row in every group and opens Actionable if it was closed (it never looks like a no-op); the other groups keep their state — their rows are expanded too, visible once you open them. `Collapse all` closes every row and touches no group.
 
-**One-line mode.** The panel always opens full. `Collapse to one line` shrinks it to a single row (`🧭 N open · ▶ A · ⛔ G · ⏳ W`), and pressing that row expands it back (at least 3 rows). The desktop app's minimized widget shows the same glance line.
+**One-line mode.** At the dock seat the panel opens full; above the prompt (window mode) it opens as the single collapsed row (`🧭 N open · ▶ A · ⛔ G · ⏳ W`) — press it to expand back (at least 3 rows). `Collapse to one line` shrinks a full panel to that one row. The desktop app's minimized widget shows the same glance line.
 
 ### Placement: Claude Code decides where the pane sits
 
-Claude Code (2.1.327) does not let a mod choose where a pane sits: the terminal docks it beside the transcript in the fullscreen layout from 110 columns (the engine picks the side) and otherwise seats it above the prompt; the desktop app may minimize it to a widget. So there is no position setting (removed in 0.18.0): `/waypoints-pane` toggles the panel open/closed and the pane goes wherever the surface seats it. `/waypoints-pane` with any argument is refused — positions were removed.
+Claude Code (2.1.327) does not let a mod choose where a pane sits: the terminal docks it beside the transcript in the fullscreen layout from 110 columns (the engine picks the side) and otherwise seats it above the prompt; the desktop app may minimize it to a widget. So there is no position setting (removed in 0.18.0): `/waypoints-pane` toggles the panel open/closed and the pane goes wherever the surface seats it. `/waypoints-pane` with any argument is refused — positions were removed. Launch is seat-driven (0.19.0): in the fullscreen layout the panel opens at launch in every `display` mode (banner included — it is redundant there by design); in window mode it opens at launch only under `display=pane`/`both`, otherwise it stays closed until you run `/waypoints-pane`.
 
 Pick the look of a collapsed row with `waypoints.py config set pane-style plain|native|secondary|links|dark|static` (default `plain`; env `WAYPOINTS_PANE_STYLE`). `/waypoints-style` opens a pane that previews all six with your own waypoints.
 
-The panel is read-only and reads the queue only through `waypoints.py list --open --json`; it refreshes every 60 seconds and after any Bash call that mentions `waypoints`. If no surface can place the panel yet (a narrow terminal at launch), `/waypoints-pane` says `No surface draws the panel here yet (<reason>)` and waits — there is no status-line fallback (removed in 0.18.0).
+The panel is read-only and reads the queue only through `waypoints.py list --open --json` (uncapped — every open item is in the payload); it refreshes every 60 seconds and after any Bash call that mentions `waypoints`. The full queue renders in the panel — there is no row cap — and the pane body scrolls with the wheel/scroll keys (the engine owns that window), so a long actionable list is never cut short. If no surface can place the panel yet (a narrow terminal at launch), `/waypoints-pane` says `No surface draws the panel here yet (<reason>)` and waits — there is no status-line fallback (removed in 0.18.0).
 
 Developing the mod: `scripts/lay-mod-types.sh` copies this build's mod API types into the gitignored `.claude-plugin/types/` so `tsc -p .` and editors resolve `'claude-code'`; `claude plugin test .` runs `tests/mod/` (pytest runs it too).
 

@@ -6,7 +6,6 @@ import type { Row, Snapshot } from '../types'
 const PANE = 'waypoints'
 const STYLE_PANE = 'waypoints-style'
 const REFRESH_MS = 60_000
-const MAX_TOP = 40
 // One-line mode expands back to at least this many body rows (spec item 10).
 const MIN_ROWS = 3
 
@@ -23,8 +22,9 @@ const STYLES: readonly PaneStyle[] = [
 // 0.18.0: positions are gone — Claude Code decides where a pane sits (docked beside the
 // transcript in the fullscreen layout from 110 columns, inline above the prompt otherwise,
 // or a desktop widget). The mod never writes a status line; the pane opens full at every seat.
-type GroupId = 'actionable' | 'gated' | 'waiting'
+type GroupId = 'pinned' | 'actionable' | 'gated' | 'waiting'
 const GROUPS: readonly { id: GroupId; symbol: string; label: string }[] = [
+  { id: 'pinned', symbol: '📌', label: 'Pinned' },
   { id: 'actionable', symbol: '▶', label: 'Actionable' },
   { id: 'gated', symbol: '⛔', label: 'Gated' },
   { id: 'waiting', symbol: '⏳', label: 'Waiting' },
@@ -32,8 +32,9 @@ const GROUPS: readonly { id: GroupId; symbol: string; label: string }[] = [
 
 const snapshot = atom({ plugin: 'waypoints', key: 'snapshot' } as const, null)
 const expanded = atom({ plugin: 'waypoints', key: 'expanded' } as const, [])
-const groups = atom({ plugin: 'waypoints', key: 'groups' } as const, ['actionable'])
+const groups = atom({ plugin: 'waypoints', key: 'groups' } as const, [])
 const compact = atom({ plugin: 'waypoints', key: 'compact' } as const, null)
+const autoOpened = atom({ plugin: 'waypoints', key: 'autoOpened' } as const, false)
 
 type Item = {
   id: string
@@ -118,8 +119,7 @@ const load = async ($: EngineInterface): Promise<Snapshot> => {
       summary: [...(i.summary ?? []), ...why],
       isPinned: i.pinned,
     })
-    const unpinned = (tier: string) =>
-      rows.filter(i => !i.pinned && i.tier === tier).slice(0, MAX_TOP)
+    const unpinned = (tier: string) => rows.filter(i => !i.pinned && i.tier === tier)
 
     return {
       display,
@@ -132,7 +132,6 @@ const load = async ($: EngineInterface): Promise<Snapshot> => {
       pinned: rows.filter(i => i.pinned).map(i => row(i)),
       top: rows
         .filter(i => !i.pinned && (i.tier === 'do-now' || i.tier === 'heavy'))
-        .slice(0, MAX_TOP)
         .map(i => row(i)),
       gatedRows: unpinned('gated').map(i => row(i, i.gate_reason ? [`gate: ${i.gate_reason}`] : [])),
       waitingRows: unpinned('waiting').map(i => row(i, i.waiting_on ? [`waiting on: ${i.waiting_on}`] : [])),
@@ -157,15 +156,18 @@ const refresh = async ($: EngineInterface) => {
 const paneOpen = ($: EngineInterface, rows?: number) =>
   $.ui.open(rows === undefined ? { id: PANE, title: 'Waypoints' } : { id: PANE, title: 'Waypoints', rows })
 
-// Opens the full pane wherever the surface seats it, and says honestly what that seat is.
-const openPane = async ($: EngineInterface, isFullscreen: boolean | undefined): Promise<string> => {
+// Opens the pane wherever the surface seats it, and says honestly what that seat is.
+// `auto` records whether the MOD (session.start) or the person (/waypoints-pane) opened it —
+// the auto-opened pane closes itself where the surface will not dock it under display=banner.
+const openPane = async ($: EngineInterface, isFullscreen: boolean | undefined, auto: boolean): Promise<string> => {
+  await update($, autoOpened, () => auto)
   const r = await paneOpen($)
   if (!r.isPlaced) {
     return `No surface draws the panel here yet${'reason' in r && r.reason ? ` (${r.reason})` : ''}.`
   }
   return isFullscreen === true
     ? 'Waypoints panel docked beside the transcript (the engine picks the side).'
-    : 'Waypoints panel opened above the prompt.'
+    : 'Waypoints panel opened above the prompt (one line; press it to expand).'
 }
 
 const closePane = async ($: EngineInterface): Promise<boolean> => {
@@ -291,9 +293,10 @@ export const register: Register = on => {
     })
     await refresh($)
     const snap = await read($, snapshot)
-    // display != banner shows the queue at launch, wherever the surface seats the pane.
-    if (snap !== null && snap.display !== 'banner') {
-      await openPane($, undefined)
+    // 0.19.0 seat-driven launch: the pane opens at launch in EVERY display mode; under
+    // display=banner the first render closes it again where the surface will not dock it.
+    if (snap !== null) {
+      await openPane($, undefined, true)
     }
     $.clock.every(REFRESH_MS, () => refresh($))
 
@@ -316,7 +319,7 @@ export const register: Register = on => {
     }
     await refresh($)
 
-    return { text: await openPane($, isFullscreen) }
+    return { text: await openPane($, isFullscreen, false) }
   })
 
   on('command.run', { command: 'waypoints-style' }, async $ => {
@@ -350,6 +353,13 @@ export const register: Register = on => {
     }
 
     const placement = e.props.placement
+    // 0.19.0 seat-driven launch: under display=banner the pane auto-opened at launch to learn
+    // its seat; where the surface will NOT dock it (inline above the prompt, desktop widget),
+    // the printed banner stays the queue view and the pane closes itself on this first render.
+    if (placement !== 'dock' && snap.display === 'banner' && (await read($, autoOpened))) {
+      const panes = await $.ui.panes()
+      if (panes.some(p => p.id === PANE)) void closePane($)
+    }
     // A desktop widget is a glance: clicks may not reach it, so it carries no Button.
     if (placement === 'widget') {
       return <Text dimColor>{summaryText(snap)}</Text>
@@ -367,23 +377,25 @@ export const register: Register = on => {
           : text,
     }
     const members: Record<GroupId, Row[]> = {
+      pinned: snap.pinned,
       actionable: snap.top,
       gated: snap.gatedRows,
       waiting: snap.waitingRows,
     }
     const counts: Record<GroupId, number> = {
+      pinned: snap.pinned.length,
       actionable: snap.actionable,
       gated: snap.gated,
       waiting: snap.waiting,
     }
     // Rows a waypoint takes: its title, plus (when open) its bullets and id line.
     const cost = (r: Row) => (open.has(r.id) ? 2 + r.summary.length : 1)
-    const visible = [...snap.pinned, ...GROUPS.flatMap(g => (shown.has(g.id) ? members[g.id] : []))]
+    const visible = GROUPS.flatMap(g => (shown.has(g.id) ? members[g.id] : []))
     const fullRows = 3 + GROUPS.length + visible.reduce((n, r) => n + cost(r), 0)
 
-    // One-line mode: only when the person collapses it. 0.18.0: the pane ALWAYS opens full
-    // at every seat; null no longer follows the seat.
-    const isCompact = (await read($, compact)) ?? false
+    // One-line mode: chosen by the person, or (left to seat) at the inline seat above the
+    // prompt — 0.19.0 dogfooding found the full list too obtrusive there. The dock is full.
+    const isCompact = (await read($, compact)) ?? placement !== 'dock'
     if (isCompact) {
       return (
         <Button key="one-line" plain dimColor onPress={() => setCompact($, false, fullRows)}>
@@ -410,20 +422,9 @@ export const register: Register = on => {
       )
     }
 
-    let left = Math.max(6, (e.viewport?.rows ?? 24) - 9)
-    const fit = (rows: Row[]) => {
-      const out: Row[] = []
-      for (const r of rows) {
-        if (left - cost(r) < 0 && out.length > 0) break
-        left -= cost(r)
-        out.push(r)
-      }
-
-      return out
-    }
-    const pinned = fit(snap.pinned)
-    const fitted = GROUPS.map(g => ({ ...g, rows: shown.has(g.id) ? fit(members[g.id]) : [] }))
-    const hidden = visible.length - pinned.length - fitted.reduce((n, g) => n + g.rows.length, 0)
+    // 0.19.0: no fit cut — every row of every open group renders, and the engine's own scroll
+    // window over the pane body (SiteScroll, read-only) lets the person move through them.
+    const fitted = GROUPS.map(g => ({ ...g, rows: shown.has(g.id) ? members[g.id] : [] }))
 
     return (
       <Box flexDirection="column">
@@ -432,7 +433,15 @@ export const register: Register = on => {
           <Button
             key="expand-all"
             label="Expand all"
-            onPress={() => update($, expanded, () => visible.map(r => r.id))}
+            onPress={() => {
+              // Every row in EVERY group (open or closed) gets its bullets open, and the
+              // Actionable group is opened so the result is visible — Expand all must never
+              // look like a no-op. Other groups keep their closed state; their rows are
+              // expanded-state too, visible once the person opens them.
+              update($, expanded, () =>
+                [...snap.pinned, ...snap.top, ...snap.gatedRows, ...snap.waitingRows].map(r => r.id))
+              update($, groups, list => (list.includes('actionable') ? list : [...list, 'actionable']))
+            }}
           />
           <Text> </Text>
           <Button
@@ -441,8 +450,6 @@ export const register: Register = on => {
             onPress={() => update($, expanded, () => [])}
           />
         </Box>
-        {pinned.length > 0 && <Text bold>📌 Pinned</Text>}
-        {rowList(ui, snap.style, pinned, look, 'p')}
         {fitted.map(g => (
           <Box key={`group-${g.id}`} flexDirection="column">
             <Button key={`group-${g.id}-title`} plain onPress={() => flipGroup($, g.id)}>
@@ -453,7 +460,6 @@ export const register: Register = on => {
             {rowList(ui, snap.style, g.rows, look, g.id)}
           </Box>
         ))}
-        {hidden > 0 && <Text dimColor>  … and {hidden} more (collapse some, or widen the pane)</Text>}
         {snap.untriaged > 0 && <Text dimColor>{snap.untriaged} untriaged</Text>}
       </Box>
     )
