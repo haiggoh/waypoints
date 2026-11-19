@@ -169,7 +169,7 @@ const openPane = async ($: EngineInterface, isFullscreen: boolean | undefined, a
   }
   return isFullscreen === true
     ? 'Waypoints panel docked beside the transcript (the engine picks the side).'
-    : 'Waypoints panel opened above the prompt.'
+    : 'Waypoints panel opened above the prompt (one line; press it to expand).'
 }
 
 const closePane = async ($: EngineInterface): Promise<boolean> => {
@@ -393,9 +393,9 @@ export const register: Register = on => {
     const visible = [...snap.pinned, ...GROUPS.flatMap(g => (shown.has(g.id) ? members[g.id] : []))]
     const fullRows = 3 + GROUPS.length + visible.reduce((n, r) => n + cost(r), 0)
 
-    // One-line mode: only when the person collapses it. 0.18.0: the pane ALWAYS opens full
-    // at every seat; null no longer follows the seat.
-    const isCompact = (await read($, compact)) ?? false
+    // One-line mode: chosen by the person, or (left to seat) at the inline seat above the
+    // prompt — 0.19.0 dogfooding found the full list too obtrusive there. The dock is full.
+    const isCompact = (await read($, compact)) ?? placement !== 'dock'
     if (isCompact) {
       return (
         <Button key="one-line" plain dimColor onPress={() => setCompact($, false, fullRows)}>

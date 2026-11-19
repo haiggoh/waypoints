@@ -279,24 +279,37 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 
-  // ---- the pane opens FULL by default at every seat (0.18.0) ----------------------------
+  // ---- the seat decides the default height (0.19.0): dock = full, inline = one line --------
 
-  test(`inline and dock seats both render FULL by default (${surface})`, async ($, on) => {
+  test(`dock seat renders FULL by default (${surface})`, async ($, on) => {
+    engine(on)
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    const ui = (await mountPane($ as never, surface, 'dock')) as {
+      find: (q: object) => Promise<{ text: string } | undefined>
+      unmount: () => Promise<void>
+    }
+    expect(await ui.find({ key: 'one-line' })).toBeUndefined()
+    expect(await ui.find({ key: 'collapse-one-line' })).toBeDefined()
+    expect(await ui.find({ key: 'group-actionable-title' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test(`inline seat renders COLLAPSED (one line) by default, press expands (${surface})`, async ($, on) => {
     const rec = engine(on)
     await $.session.start({ cwd: '/', surface, isInteractive: true })
-    for (const placement of ['inline', 'dock'] as const) {
-      const ui = (await mountPane($ as never, surface, placement)) as {
-        find: (q: object) => Promise<{ text: string } | undefined>
-        unmount: () => Promise<void>
-      }
-      // full: the collapse button and group titles are both there, the one-line row is not
-      expect(await ui.find({ key: 'one-line' })).toBeUndefined()
-      expect(await ui.find({ key: 'collapse-one-line' })).toBeDefined()
-      expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▾ ▶ Actionable (2)')
-      await ui.unmount()
+    const ui = (await mountPane($ as never, surface, 'inline')) as {
+      find: (q: object) => Promise<{ text: string } | undefined>
+      findAll: (q: object) => Promise<unknown[]>
+      press: (t: { key: string }) => Promise<unknown>
+      unmount: () => Promise<void>
     }
-    // never collapsed at launch: every open asked for the auto height, not one row
-    expect(rec.opens.filter(o => o.id === 'waypoints').every(o => Number(o.rows ?? 0) !== 1)).toBe(true)
+    expect((await ui.find({ key: 'one-line' }))?.text).toBe('🧭 5 open · ▶ 2 · ⛔ 2 · ⏳ 1')
+    expect(await ui.find({ key: 'group-actionable-title' })).toBeUndefined()
+    expect((await ui.findAll({ type: 'Button' })).length).toBe(1)
+    await ui.press({ key: 'one-line' })
+    expect(await ui.find({ key: 'group-actionable-title' })).toBeDefined()
+    expect(Number(rec.opens[rec.opens.length - 1]?.rows)).toBeGreaterThanOrEqual(3)
+    await ui.unmount()
   })
 
   test(`collapse to one line then press expands back to full (${surface})`, async ($, on) => {
@@ -328,6 +341,15 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 }
+
+test('/waypoints-pane in window mode opens the collapsed one line and says so', async ($, on) => {
+  engine(on, { display: 'banner' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await pane($ as never) // close the auto-opened pane
+  const r = await pane($ as never, '', false) // window mode (main screen, not fullscreen)
+  expect(r.text ?? '').toContain('above the prompt')
+  expect(r.text ?? '').toContain('one line')
+})
 
 test('a desktop widget draws a glance line and no buttons', async ($, on) => {
   engine(on)
