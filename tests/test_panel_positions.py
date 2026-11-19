@@ -1,9 +1,13 @@
-"""0.17.0: the mod opens the panel at launch when display != banner, /waypoints-pane toggles,
-and /waypoints-pane <top|bottom|left|right> persists pane-position and opens there. The tsx is
-asserted textually (the repo's tsx-test idiom, as in test_pane_style_setting.py) plus the
-config key is covered in test_pane_position_setting.py."""
+"""0.17.0 pane behavior is tested on the real engine by tests/mod/register.test.tsx
+(`claude plugin test .`): honest seat mapping, toggle, group titles, one-line mode and the
+never-sit rule, on the terminal and desktop surfaces. This file keeps the cross-language
+parity check and makes the pytest gate run those mod tests, so they cannot be skipped by
+shipping with pytest alone.
+"""
 import os
 import re
+import shutil
+import subprocess
 
 import waypoints_core as c
 
@@ -11,34 +15,26 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MOD = os.path.join(ROOT, "hooks", "register.tsx")
 
 
-def _src():
-    return open(MOD, encoding="utf-8").read()
-
-
 def test_positions_constant_has_exactly_the_four():
-    src = _src()
+    src = open(MOD, encoding="utf-8").read()
     block = src.split("const POSITIONS", 1)[1].split("= [", 1)[1].split("]", 1)[0]
     got = re.findall(r"'([a-z]+)'", block)
     assert tuple(got) == ("top", "bottom", "left", "right")
     assert tuple(got) == c.PANE_POSITIONS
 
 
-def test_session_start_opens_panel_when_display_not_banner():
-    src = _src()
-    assert "snap.display !== 'banner'" in src
-    assert "openAt($, snap.position)" in src
-
-
-def test_command_toggles_without_arg_and_moves_with_arg():
-    src = _src()
-    assert "command: 'waypoints-pane'" in src
-    # arg validation, persist, toggle
-    assert "pane-position', arg" in src or "'pane-position'" in src
-    assert "closePanel($)" in src
-
-
-def test_bottom_is_not_above_the_prompt():
-    src = _src()
-    # bottom must never map to the inline/above-prompt seat; it is documented as forbidden
-    bottom_block = src.split("pos === 'bottom'", 1)[1].split("}", 1)[0]
-    assert "inline" not in bottom_block.lower() or "forbidden" in bottom_block.lower() or "not" in bottom_block.lower()
+def test_mod_behavior_suite_passes_on_the_engine():
+    claude = shutil.which("claude")
+    assert claude, "claude CLI not on PATH: the mod tests (claude plugin test .) cannot run"
+    ran = subprocess.run(
+        [claude, "plugin", "test", ROOT],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=240,
+    )
+    out = ran.stdout + ran.stderr
+    assert ran.returncode == 0, out[-4000:]
+    m = re.search(r"Ran (\d+) tests? across", out)
+    assert m and int(m.group(1)) >= 20, f"too few mod tests ran:\n{out[-2000:]}"
+    assert re.search(r"\b0 fail\b", out), out[-2000:]

@@ -4,3 +4,6 @@ __pycache__/
 .DS_Store
 dist/
 __pycache__/
+
+# mod API types laid by scripts/lay-mod-types.sh (or the engine); per-build, never committed
+.claude-plugin/types/

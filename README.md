@@ -199,17 +199,35 @@ single-repo banners render exactly as before.
 
 `display` selects where the open queue appears:
 
-- `banner` — default; the SessionStart banner prints exactly as before.
-- `pane` — the queue shows only in the Claude Code mod's side pane plus a one-line band above the prompt; the model still receives the full banner as context.
+- `pane` — default since 0.17.0; the queue shows in the Claude Code mod (panel or one-line summary, see Position below) and the printed banner is off; the model still receives the full banner as context.
+- `banner` — the SessionStart banner prints exactly as before, and the mod shows nothing. Restore it with `waypoints.py config set display banner`.
 - `both` — banner and pane.
 
 Set it with `waypoints.py config set display pane|banner|both`, in the interactive menu's `settings` group, or via `WAYPOINTS_DISPLAY`. Resolution order is `WAYPOINTS_DISPLAY` > settings file > default. `waypoints.py config get display --raw` prints just the current value.
 
-The pane and band come from the Claude Code mod bundled in the plugin (`hooks/register.tsx`) and work in Claude Code (terminal) and the Claude desktop app's Code tab on builds that support mods; on builds without mod support, keep `display` at `banner`. Each waypoint is one collapsed row: press it to show its summary bullets and id, or use Expand all / Collapse all.
+The panel comes from the Claude Code mod bundled in the plugin (`hooks/register.tsx`) and works in Claude Code (terminal) and the Claude desktop app's Code tab on builds that support mods; on builds without mod support, set `display` to `banner`. The panel and the terminal/desktop render are one implementation, so they behave identically.
+
+**Groups.** Below any pinned items, the panel has three collapsible group titles — `▶ Actionable (N)` (open by default), `⛔ Gated (N)` and `⏳ Waiting (N)`. Press a title to expand or collapse it. Inside a group each waypoint is one collapsed row: press it to show its summary bullets (plus its gate reason or what it waits on) and id, or use Expand all / Collapse all.
+
+**One-line mode.** `Collapse to one line` shrinks the panel to a single status-line row, `🧭 N open · ▶ A · ⛔ G · ⏳ W`; press it to expand back (at least 3 rows). The desktop app's minimized widget shows the same line.
+
+### Position: what a mod can and cannot do
+
+Claude Code (2.1.327) does not let a mod choose where a pane sits: the terminal docks it beside the transcript in the fullscreen layout from 110 columns (the engine picks the side), and otherwise seats it above the prompt; the desktop app may minimize it to a widget. So `pane-position` (env `WAYPOINTS_PANE_POSITION`, or `/waypoints-pane <position>`) maps honestly:
+
+| `pane-position` | What you get |
+|---|---|
+| `left` / `right` (default `right`) | the panel. Docked beside the transcript in the fullscreen layout (left and right behave the same); in the normal layout it sits above the prompt as **one line only** until you press it. |
+| `bottom` | no panel; a one-line summary under the prompt. A mod cannot place anything below the statusline. |
+| `top` | no panel; a one-line summary under the logo notice when Claude Code shows one, otherwise under the prompt. |
+
+`/waypoints-pane` with no argument toggles the full panel for every position; `/waypoints-pane <position>` saves the position and says exactly where the queue went.
 
 Pick the look of a collapsed row with `waypoints.py config set pane-style plain|native|secondary|links|dark|static` (default `plain`; env `WAYPOINTS_PANE_STYLE`). `/waypoints-style` opens a pane that previews all six with your own waypoints.
 
-The pane and band are read-only and read the queue only through `waypoints.py list --open --json`; they refresh every 60 seconds and after any Bash call that mentions `waypoints`. `/waypoints-pane` opens the pane at any width; in the terminal, a pane the mod opens by itself draws only from 144 columns wide.
+The panel is read-only and reads the queue only through `waypoints.py list --open --json`; it refreshes every 60 seconds and after any Bash call that mentions `waypoints`. A panel you ask for (`/waypoints-pane`) draws at any width; one the mod opens by itself at launch draws only from 144 terminal columns, and until then the one-line summary under the prompt stands in for it.
+
+Developing the mod: `scripts/lay-mod-types.sh` copies this build's mod API types into the gitignored `.claude-plugin/types/` so `tsc -p .` and editors resolve `'claude-code'`; `claude plugin test .` runs `tests/mod/` (pytest runs it too).
 
 ## The `waypoints` command, and why output size is a feature
 

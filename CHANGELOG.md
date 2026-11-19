@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.17.0] — 2026-11-19
+
+### Changed — the panel is the default; the banner is off while it shows
+
+- **`display` now defaults to `pane`**: the waypoints panel opens at launch with no slash
+  command, and the printed SessionStart banner is off so the list never shows twice (the model
+  still receives the full banner as context). **To get the banner back:**
+  `waypoints.py config set display banner`.
+- **The one-line band above the prompt is gone.** It repeated the counts and sat in the seat
+  above the prompt; the panel's one-line mode and the summary line replace it.
+
+### Added — group titles, one-line mode, positions that say what they really do
+
+- **Collapsible group titles**: `▶ Actionable (N)` (open by default), `⛔ Gated (N)` and
+  `⏳ Waiting (N)` — press a title to expand or collapse it. Gated and waiting rows show their
+  gate reason / what they wait on. One implementation for the terminal and the desktop Code tab.
+- **One-line mode**: `Collapse to one line` shrinks the panel to one status-line row
+  (`🧭 N open · ▶ A · ⛔ G · ⏳ W`); pressing it expands back to at least 3 rows. Wherever the
+  terminal seats the panel above the prompt, it starts as that one line; a desktop widget shows
+  it as a glance line.
+- **`pane-position`** (`top | bottom | left | right`, default `right`; env
+  `WAYPOINTS_PANE_POSITION`; `/waypoints-pane <position>` saves it). Claude Code does not let a
+  mod choose a pane's seat, so the values map honestly: `left`/`right` = the panel (docked beside
+  the transcript in the fullscreen layout — the engine picks the side, so they behave the same —
+  one line above the prompt otherwise); `bottom` = a one-line summary under the prompt (nothing
+  can be placed below the statusline); `top` = a one-line summary under the logo notice when one
+  shows, else under the prompt. `/waypoints-pane` reports exactly which of these you got;
+  with no argument it toggles the full panel for every position.
+- A panel no surface can place yet (a narrow terminal at launch) leaves the one-line summary
+  under the prompt, so the queue is never silently invisible.
+
+### Tests and tooling
+
+- `tests/mod/register.test.tsx`: 26 behavior tests on the real engine (`claude plugin test .`),
+  every UI test run on the terminal and the desktop surface; pytest runs them, so the ship gate
+  does. Replaces the text-matching tsx checks (one of which could not fail).
+- `tsconfig.json` + `scripts/lay-mod-types.sh` (`--help`): lays the mod API types into the
+  gitignored `.claude-plugin/types/` so `tsc -p .` and the TypeScript language server resolve
+  `'claude-code'` instead of flagging every JSX line.
+
 ## [0.16.0] — 2026-11-18
 
 ### Added — Display setting: banner, pane or both
