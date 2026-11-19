@@ -172,14 +172,19 @@ try:
             }
         }
         if display == "pane":
-            # 0.17.0: the panel is the default UI, so the printed banner is OFF while it shows
-            # (no double render). The model still gets everything (additionalContext).
+            # Banner off in this mode (the panel shows the queue instead). The model still
+            # gets everything (additionalContext).
             out["hookSpecificOutput"]["additionalContext"] = (
                 model_note + "\n(Display mode is 'pane': the user sees this queue in the "
                 "waypoints panel, not as a printed banner. `waypoints.py config get "
                 "display` shows the mode; set it to banner or both to print the banner again.)")
         else:
-            out["systemMessage"] = banner
+            # 0.19.0: one concise line telling the person how to switch — the pane on, the
+            # banner off. Applies to banner and both. No console command in the user-visible
+            # banner (users talk to Claude, not the CLI — test_hook_usermsg…), so the banner-off
+            # half is phrased as asking Claude.
+            out["systemMessage"] = banner + (
+                "\npane: /waypoints-pane · banner off: ask Claude to set display=pane")
         print(json.dumps(out))
 except Exception:
     pass

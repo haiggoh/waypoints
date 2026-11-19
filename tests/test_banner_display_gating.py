@@ -1,5 +1,6 @@
-"""0.17.0: the printed SessionStart banner is OFF while the panel is active (display=pane),
-ON for banner/both. The model always gets additionalContext. display=pane is the new default."""
+"""0.19.0: the printed SessionStart banner is back ON by default (display=banner), OFF only for
+display=pane. The model always gets additionalContext. The banner carries one hint line saying
+how to switch (pane on / banner off)."""
 import json
 import os
 import subprocess
@@ -23,9 +24,9 @@ def _hook_with_display(mode):
     return json.loads(_run(HOOK).stdout)
 
 
-def test_default_mode_is_pane_and_prints_no_banner():
-    out = _hook_with_display(None)          # default is now pane
-    assert "systemMessage" not in out, "panel default must not double-render the banner"
+def test_default_mode_is_banner_and_prints_banner():
+    out = _hook_with_display(None)          # default is banner now
+    assert "gating probe item" in out["systemMessage"]
     assert "gating probe item" in out["hookSpecificOutput"]["additionalContext"]
 
 
@@ -41,7 +42,17 @@ def test_banner_mode_prints_banner():
     assert "gating probe item" in out["systemMessage"]
 
 
+def test_banner_carries_the_switch_hint_line():
+    out = _hook_with_display("banner")
+    msg = out["systemMessage"]
+    assert "pane: /waypoints-pane" in msg
+    assert "banner off: ask Claude to set display=pane" in msg
+    # the user-visible banner never carries a console command (standing UX rule)
+    assert "waypoints.py" not in msg.split("\n")[-1]
+
+
 def test_both_mode_prints_banner_and_model_context():
     out = _hook_with_display("both")
     assert "gating probe item" in out["systemMessage"]
+    assert "pane: /waypoints-pane" in out["systemMessage"]   # hint shows in both too
     assert "gating probe item" in out["hookSpecificOutput"]["additionalContext"]

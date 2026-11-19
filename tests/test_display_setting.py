@@ -27,9 +27,9 @@ def _run(path, *args, env=None):
 
 # --- settings resolution ----------------------------------------------------------------------
 
-def test_default_display_is_pane_default():
-    # 0.17.0: the panel is the default loaded UI in Claude Code; the banner is opt-in.
-    assert c.get_setting("display") == ("pane", "default")
+def test_default_display_is_banner():
+    # 0.19.0: the printed banner is back as the default; the panel is opt-in (fullscreen auto).
+    assert c.get_setting("display") == ("banner", "default")
 
 
 def test_env_display_wins_over_the_file_and_names_the_env_var(monkeypatch):
@@ -55,7 +55,7 @@ def test_set_setting_refuses_an_invalid_display_value_without_writing():
 def test_unset_setting_returns_display_to_default():
     c.set_setting("display", "both")
     c.unset_setting("display")
-    assert c.get_setting("display") == ("pane", "default")
+    assert c.get_setting("display") == ("banner", "default")
 
 
 def test_invalid_display_env_fails_loudly_naming_the_variable(monkeypatch):
