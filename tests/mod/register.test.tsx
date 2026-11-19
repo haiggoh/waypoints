@@ -136,19 +136,58 @@ const pane = (
     presentation: { isFullscreen, columns: isFullscreen ? 160 : 100 },
   } as never)
 
-// ---- launch ---------------------------------------------------------------------------
+// ---- launch: seat-driven (0.19.0) --------------------------------------------------------
+// display=banner (the default) opens the pane at launch but CLOSES it where the surface will
+// not dock it — window mode and the desktop widget stay banner-only. display=pane|both keeps
+// the pane at every seat.
 
-test('display=pane opens the pane at launch', async ($, on) => {
-  const rec = engine(on)
+test('display=pane opens the pane at launch in window mode and it stays open', async ($, on) => {
+  const rec = engine(on) // default display=pane
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   expect(rec.opens.some(o => o.id === 'waypoints')).toBe(true)
+  const ui = (await mountPane($ as never, 'terminal', 'inline')) as { unmount: () => Promise<void> }
+  expect(rec.closes).toBe(0)
+  expect(rec.panes.some(p => p.id === 'waypoints')).toBe(true)
+  await ui.unmount()
 })
 
-test('display=banner opens nothing and sets no status line', async ($, on) => {
+test('display=banner auto-opens then closes the pane on an inline seat (window mode)', async ($, on) => {
   const rec = engine(on, { display: 'banner' })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  expect(rec.opens.length).toBe(0)
-  expect(rec.status.length).toBe(0)
+  expect(rec.opens.some(o => o.id === 'waypoints')).toBe(true)
+  const ui = (await mountPane($ as never, 'terminal', 'inline')) as { unmount: () => Promise<void> }
+  await ui.unmount()
+  expect(rec.closes).toBeGreaterThanOrEqual(1)
+  expect(rec.panes.some(p => p.id === 'waypoints')).toBe(false)
+  expect(rec.status.length).toBe(0) // 0.18.0 invariant: no status line ever
+})
+
+test('display=banner keeps the pane on a dock seat (fullscreen)', async ($, on) => {
+  const rec = engine(on, { display: 'banner' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = (await mountPane($ as never, 'terminal', 'dock')) as { unmount: () => Promise<void> }
+  await ui.unmount()
+  expect(rec.closes).toBe(0)
+  expect(rec.panes.some(p => p.id === 'waypoints')).toBe(true)
+})
+
+test('display=banner closes an auto-opened desktop widget too', async ($, on) => {
+  const rec = engine(on, { display: 'banner' })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = (await mountPane($ as never, 'desktop', 'widget')) as { unmount: () => Promise<void> }
+  await ui.unmount()
+  expect(rec.closes).toBeGreaterThanOrEqual(1)
+})
+
+test('a manual /waypoints-pane open in window mode stays open', async ($, on) => {
+  const rec = engine(on, { display: 'banner' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await pane($ as never) // closes the auto-opened one
+  const second = await pane($ as never) // manual open
+  expect(second.text).not.toBe('Waypoints panel closed.')
+  const ui = (await mountPane($ as never, 'terminal', 'inline')) as { unmount: () => Promise<void> }
+  await ui.unmount()
+  expect(rec.panes.some(p => p.id === 'waypoints')).toBe(true)
 })
 
 // ---- no status-line summary, ever (0.18.0 removed it) ----------------------------------
@@ -167,30 +206,33 @@ test('the mod never calls ui.status (launch, toggle, refresh)', async ($, on) =>
 test('/waypoints-pane with any argument is refused and nothing is saved', async ($, on) => {
   const rec = engine(on, { display: 'banner' })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const opensAtLaunch = rec.opens.length // every display mode auto-opens at launch now
   for (const arg of ['bottom', 'top', 'left', 'right', 'middle', 'Bottom']) {
     const r = await pane($ as never, arg)
     expect(r.text).toBe('/waypoints-pane takes no argument (positions were removed in 0.18.0: '
       + 'Claude Code decides where a pane sits).')
   }
   expect(rec.sets.length).toBe(0)
-  expect(rec.opens.length).toBe(0)
+  expect(rec.opens.length).toBe(opensAtLaunch) // refusals open nothing extra
 })
 
 test('/waypoints-pane with no argument toggles the panel', async ($, on) => {
   const rec = engine(on, { display: 'banner' })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(rec.panes.some(p => p.id === 'waypoints')).toBe(true) // auto-opened at launch
   const first = await pane($ as never)
-  expect(rec.panes.some(p => p.id === 'waypoints')).toBe(true)
-  const second = await pane($ as never)
+  expect(first.text).toBe('Waypoints panel closed.')
   expect(rec.panes.some(p => p.id === 'waypoints')).toBe(false)
-  expect(second.text).toBe('Waypoints panel closed.')
-  expect(first.text).not.toBe('Waypoints panel closed.')
+  const second = await pane($ as never)
+  expect(second.text).not.toBe('Waypoints panel closed.')
+  expect(rec.panes.some(p => p.id === 'waypoints')).toBe(true)
 })
 
 test('a pane no surface places says so, and nothing else stands in', async ($, on) => {
   const rec = engine(on, { display: 'banner', isPlaced: false })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const r = await pane($ as never)
+  await pane($ as never) // close the auto-opened (unplaced) pane
+  const r = await pane($ as never) // manual re-open reports the unplaced seat
   expect(r.text ?? '').toContain('No surface draws the panel here yet')
   expect(r.text ?? '').toContain('too narrow')
   expect(rec.status.length).toBe(0)

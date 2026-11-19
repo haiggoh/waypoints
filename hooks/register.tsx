@@ -34,6 +34,7 @@ const snapshot = atom({ plugin: 'waypoints', key: 'snapshot' } as const, null)
 const expanded = atom({ plugin: 'waypoints', key: 'expanded' } as const, [])
 const groups = atom({ plugin: 'waypoints', key: 'groups' } as const, ['actionable'])
 const compact = atom({ plugin: 'waypoints', key: 'compact' } as const, null)
+const autoOpened = atom({ plugin: 'waypoints', key: 'autoOpened' } as const, false)
 
 type Item = {
   id: string
@@ -157,8 +158,11 @@ const refresh = async ($: EngineInterface) => {
 const paneOpen = ($: EngineInterface, rows?: number) =>
   $.ui.open(rows === undefined ? { id: PANE, title: 'Waypoints' } : { id: PANE, title: 'Waypoints', rows })
 
-// Opens the full pane wherever the surface seats it, and says honestly what that seat is.
-const openPane = async ($: EngineInterface, isFullscreen: boolean | undefined): Promise<string> => {
+// Opens the pane wherever the surface seats it, and says honestly what that seat is.
+// `auto` records whether the MOD (session.start) or the person (/waypoints-pane) opened it —
+// the auto-opened pane closes itself where the surface will not dock it under display=banner.
+const openPane = async ($: EngineInterface, isFullscreen: boolean | undefined, auto: boolean): Promise<string> => {
+  await update($, autoOpened, () => auto)
   const r = await paneOpen($)
   if (!r.isPlaced) {
     return `No surface draws the panel here yet${'reason' in r && r.reason ? ` (${r.reason})` : ''}.`
@@ -291,9 +295,10 @@ export const register: Register = on => {
     })
     await refresh($)
     const snap = await read($, snapshot)
-    // display != banner shows the queue at launch, wherever the surface seats the pane.
-    if (snap !== null && snap.display !== 'banner') {
-      await openPane($, undefined)
+    // 0.19.0 seat-driven launch: the pane opens at launch in EVERY display mode; under
+    // display=banner the first render closes it again where the surface will not dock it.
+    if (snap !== null) {
+      await openPane($, undefined, true)
     }
     $.clock.every(REFRESH_MS, () => refresh($))
 
@@ -316,7 +321,7 @@ export const register: Register = on => {
     }
     await refresh($)
 
-    return { text: await openPane($, isFullscreen) }
+    return { text: await openPane($, isFullscreen, false) }
   })
 
   on('command.run', { command: 'waypoints-style' }, async $ => {
@@ -350,6 +355,13 @@ export const register: Register = on => {
     }
 
     const placement = e.props.placement
+    // 0.19.0 seat-driven launch: under display=banner the pane auto-opened at launch to learn
+    // its seat; where the surface will NOT dock it (inline above the prompt, desktop widget),
+    // the printed banner stays the queue view and the pane closes itself on this first render.
+    if (placement !== 'dock' && snap.display === 'banner' && (await read($, autoOpened))) {
+      const panes = await $.ui.panes()
+      if (panes.some(p => p.id === PANE)) void closePane($)
+    }
     // A desktop widget is a glance: clicks may not reach it, so it carries no Button.
     if (placement === 'widget') {
       return <Text dimColor>{summaryText(snap)}</Text>
