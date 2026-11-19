@@ -187,6 +187,17 @@ test('display=banner closes an auto-opened desktop widget too', async ($, on) =>
   expect(rec.closes).toBeGreaterThanOrEqual(1)
 })
 
+test('display=both keeps the pane open on an inline seat too (opt-in everywhere)', async ($, on) => {
+  // QC-4: display=both must behave like pane (pane stays at every seat), not like banner.
+  const rec = engine(on, { display: 'both' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(rec.opens.some(o => o.id === 'waypoints')).toBe(true)
+  const ui = (await mountPane($ as never, 'terminal', 'inline')) as { unmount: () => Promise<void> }
+  await ui.unmount()
+  expect(rec.closes).toBe(0)
+  expect(rec.panes.some(p => p.id === 'waypoints')).toBe(true)
+})
+
 test('a manual /waypoints-pane open in window mode stays open', async ($, on) => {
   const rec = engine(on, { display: 'banner' })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -389,6 +400,26 @@ test('state stored by 0.16 (only `expanded`) still renders with the new defaults
     unmount: () => Promise<void>
   }
   expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▸ ▶ Actionable (2)')
+  await ui.unmount()
+})
+
+test('stored 0.17 groups state ([actionable]) renders open, pinned group present and collapsed', async ($, on) => {
+  // QC-4 / plan Review Focus 1: a stored groups value from before the pinned group existed
+  // must render without crashing — Actionable open, Pinned simply collapsed.
+  engine(on, { pinned: 2 })
+  on('state.get', (_, e, next) =>
+    (e as { key?: string }).key === 'groups'
+      ? { value: { value: ['actionable'], version: 1 } }
+      : next(e),
+  )
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = (await mountPane($ as never, 'terminal', 'dock')) as {
+    find: (q: object) => Promise<{ text: string } | undefined>
+    unmount: () => Promise<void>
+  }
+  expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▾ ▶ Actionable (2)')
+  expect(await ui.find({ text: /title a0/ })).toBeDefined()
+  expect((await ui.find({ key: 'group-pinned-title' }))?.text).toBe('▸ 📌 Pinned (2)')
   await ui.unmount()
 })
 

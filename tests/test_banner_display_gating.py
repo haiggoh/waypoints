@@ -27,6 +27,9 @@ def _hook_with_display(mode):
 def test_default_mode_is_banner_and_prints_banner():
     out = _hook_with_display(None)          # default is banner now
     assert "gating probe item" in out["systemMessage"]
+    # the switch hint line is present in the DEFAULT mode too, not only on explicit banner
+    assert "pane: /waypoints-pane" in out["systemMessage"]
+    assert "banner off: ask Claude to set display=pane" in out["systemMessage"]
     assert "gating probe item" in out["hookSpecificOutput"]["additionalContext"]
 
 
@@ -47,8 +50,9 @@ def test_banner_carries_the_switch_hint_line():
     msg = out["systemMessage"]
     assert "pane: /waypoints-pane" in msg
     assert "banner off: ask Claude to set display=pane" in msg
-    # the user-visible banner never carries a console command (standing UX rule)
-    assert "waypoints.py" not in msg.split("\n")[-1]
+    # the user-visible banner never carries a console command ANYWHERE (standing UX rule) —
+    # check the whole message, not just the hint line (QC-4 finding: [-1] let earlier lines pass)
+    assert "waypoints.py" not in msg
 
 
 def test_both_mode_prints_banner_and_model_context():
