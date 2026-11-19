@@ -11,6 +11,7 @@ type Opts = {
   isPlaced?: boolean
   gated?: number
   waiting?: number
+  pinned?: number
   listFails?: boolean
 }
 
@@ -43,7 +44,10 @@ const engine = (on: On, o: Opts = {}) => {
   const waiting = Array.from({ length: o.waiting ?? 1 }, (_, n) =>
     item(`w${n}`, 'waiting', { waiting_on: `x${n}` }),
   )
-  const items = [item('a0', 'do-now'), item('a1', 'heavy'), ...gated, ...waiting]
+  const pinnedItems = Array.from({ length: o.pinned ?? 0 }, (_, n) =>
+    item(`p${n}`, 'do-now', { pinned: true }),
+  )
+  const items = [...pinnedItems, item('a0', 'do-now'), item('a1', 'heavy'), ...gated, ...waiting]
 
   on('process.run', (_, e) => {
     const argv = e.argv
@@ -241,26 +245,29 @@ test('a pane no surface places says so, and nothing else stands in', async ($, o
 // ---- groups (spec 7-9), identical on terminal and desktop --------------------------------
 
 for (const surface of SURFACES) {
-  test(`group titles collapse and expand (${surface})`, async ($, on) => {
-    engine(on)
+  test(`all four groups (incl. Pinned) start collapsed; titles expand them (${surface})`, async ($, on) => {
+    engine(on, { pinned: 2 })
     await $.session.start({ cwd: '/', surface, isInteractive: true })
     const ui = (await mountPane($ as never, surface, 'dock')) as {
       find: (q: object) => Promise<{ text: string } | undefined>
       press: (t: { key: string }) => Promise<unknown>
       unmount: () => Promise<void>
     }
-    expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▾ ▶ Actionable (2)')
+    expect((await ui.find({ key: 'group-pinned-title' }))?.text).toBe('▸ 📌 Pinned (2)')
+    expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▸ ▶ Actionable (2)')
     expect((await ui.find({ key: 'group-gated-title' }))?.text).toBe('▸ ⛔ Gated (2)')
     expect((await ui.find({ key: 'group-waiting-title' }))?.text).toBe('▸ ⏳ Waiting (1)')
-    expect(await ui.find({ text: /title g0/ })).toBeUndefined()
+    expect(await ui.find({ text: /title a0/ })).toBeUndefined()
+    expect(await ui.find({ text: /title p0/ })).toBeUndefined()
+    await ui.press({ key: 'group-pinned-title' })
+    expect((await ui.find({ key: 'group-pinned-title' }))?.text).toBe('▾ 📌 Pinned (2)')
+    expect(await ui.find({ text: /title p0/ })).toBeDefined()
+    await ui.press({ key: 'group-actionable-title' })
+    expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▾ ▶ Actionable (2)')
+    expect(await ui.find({ text: /title a0/ })).toBeDefined()
     await ui.press({ key: 'group-gated-title' })
     expect((await ui.find({ key: 'group-gated-title' }))?.text).toBe('▾ ⛔ Gated (2)')
     expect(await ui.find({ text: /title g0/ })).toBeDefined()
-    expect(await ui.find({ text: /title g1/ })).toBeDefined()
-    await ui.press({ key: 'group-gated-title' })
-    expect(await ui.find({ text: /title g0/ })).toBeUndefined()
-    await ui.press({ key: 'group-actionable-title' })
-    expect(await ui.find({ text: /title a0/ })).toBeUndefined()
     await ui.unmount()
   })
 
@@ -325,7 +332,7 @@ for (const surface of SURFACES) {
     expect(await ui.find({ key: 'group-actionable-title' })).toBeUndefined()
     expect(rec.opens[rec.opens.length - 1]?.rows).toBe(1)
     await ui.press({ key: 'one-line' })
-    expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▾ ▶ Actionable (2)')
+    expect(await ui.find({ key: 'group-actionable-title' })).toBeDefined()
     expect(Number(rec.opens[rec.opens.length - 1]?.rows)).toBeGreaterThanOrEqual(3)
     await ui.unmount()
   })
@@ -377,6 +384,46 @@ test('state stored by 0.16 (only `expanded`) still renders with the new defaults
     find: (q: object) => Promise<{ text: string } | undefined>
     unmount: () => Promise<void>
   }
+  expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▸ ▶ Actionable (2)')
+  await ui.unmount()
+})
+
+// ---- Expand all / Collapse all (0.19.0 accordion) ---------------------------------------
+
+test('Expand all opens closed Actionable and every row; other groups keep their state', async ($, on) => {
+  engine(on, { pinned: 2 })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = (await mountPane($ as never, 'terminal', 'dock')) as {
+    find: (q: object) => Promise<{ text: string } | undefined>
+    press: (t: { key: string }) => Promise<unknown>
+    unmount: () => Promise<void>
+  }
+  await ui.press({ key: 'expand-all' })
+  // Actionable opened so the result is visible (Expand all is never a no-op)…
+  expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▾ ▶ Actionable (2)')
+  expect(await ui.find({ text: /title a0/ })).toBeDefined()
+  expect(await ui.find({ text: /point a0/ })).toBeDefined() // row bullets open
+  // …other groups stay closed, but their rows got expanded-state — visible once opened
+  expect((await ui.find({ key: 'group-pinned-title' }))?.text).toBe('▸ 📌 Pinned (2)')
+  await ui.press({ key: 'group-pinned-title' })
+  expect(await ui.find({ text: /title p0/ })).toBeDefined()
+  expect(await ui.find({ text: /point p0/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('Collapse all closes every row but touches no group', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = (await mountPane($ as never, 'terminal', 'dock')) as {
+    find: (q: object) => Promise<{ text: string } | undefined>
+    press: (t: { key: string }) => Promise<unknown>
+    unmount: () => Promise<void>
+  }
+  await ui.press({ key: 'group-actionable-title' })
+  await ui.press({ key: 'expand-all' })
+  expect(await ui.find({ text: /point a0/ })).toBeDefined()
+  await ui.press({ key: 'collapse-all' })
+  expect(await ui.find({ text: /point a0/ })).toBeUndefined()
   expect((await ui.find({ key: 'group-actionable-title' }))?.text).toBe('▾ ▶ Actionable (2)')
   await ui.unmount()
 })

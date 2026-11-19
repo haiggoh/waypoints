@@ -23,8 +23,9 @@ const STYLES: readonly PaneStyle[] = [
 // 0.18.0: positions are gone — Claude Code decides where a pane sits (docked beside the
 // transcript in the fullscreen layout from 110 columns, inline above the prompt otherwise,
 // or a desktop widget). The mod never writes a status line; the pane opens full at every seat.
-type GroupId = 'actionable' | 'gated' | 'waiting'
+type GroupId = 'pinned' | 'actionable' | 'gated' | 'waiting'
 const GROUPS: readonly { id: GroupId; symbol: string; label: string }[] = [
+  { id: 'pinned', symbol: '📌', label: 'Pinned' },
   { id: 'actionable', symbol: '▶', label: 'Actionable' },
   { id: 'gated', symbol: '⛔', label: 'Gated' },
   { id: 'waiting', symbol: '⏳', label: 'Waiting' },
@@ -32,7 +33,7 @@ const GROUPS: readonly { id: GroupId; symbol: string; label: string }[] = [
 
 const snapshot = atom({ plugin: 'waypoints', key: 'snapshot' } as const, null)
 const expanded = atom({ plugin: 'waypoints', key: 'expanded' } as const, [])
-const groups = atom({ plugin: 'waypoints', key: 'groups' } as const, ['actionable'])
+const groups = atom({ plugin: 'waypoints', key: 'groups' } as const, [])
 const compact = atom({ plugin: 'waypoints', key: 'compact' } as const, null)
 const autoOpened = atom({ plugin: 'waypoints', key: 'autoOpened' } as const, false)
 
@@ -379,18 +380,20 @@ export const register: Register = on => {
           : text,
     }
     const members: Record<GroupId, Row[]> = {
+      pinned: snap.pinned,
       actionable: snap.top,
       gated: snap.gatedRows,
       waiting: snap.waitingRows,
     }
     const counts: Record<GroupId, number> = {
+      pinned: snap.pinned.length,
       actionable: snap.actionable,
       gated: snap.gated,
       waiting: snap.waiting,
     }
     // Rows a waypoint takes: its title, plus (when open) its bullets and id line.
     const cost = (r: Row) => (open.has(r.id) ? 2 + r.summary.length : 1)
-    const visible = [...snap.pinned, ...GROUPS.flatMap(g => (shown.has(g.id) ? members[g.id] : []))]
+    const visible = GROUPS.flatMap(g => (shown.has(g.id) ? members[g.id] : []))
     const fullRows = 3 + GROUPS.length + visible.reduce((n, r) => n + cost(r), 0)
 
     // One-line mode: chosen by the person, or (left to seat) at the inline seat above the
@@ -433,9 +436,8 @@ export const register: Register = on => {
 
       return out
     }
-    const pinned = fit(snap.pinned)
     const fitted = GROUPS.map(g => ({ ...g, rows: shown.has(g.id) ? fit(members[g.id]) : [] }))
-    const hidden = visible.length - pinned.length - fitted.reduce((n, g) => n + g.rows.length, 0)
+    const hidden = visible.length - fitted.reduce((n, g) => n + g.rows.length, 0)
 
     return (
       <Box flexDirection="column">
@@ -444,7 +446,15 @@ export const register: Register = on => {
           <Button
             key="expand-all"
             label="Expand all"
-            onPress={() => update($, expanded, () => visible.map(r => r.id))}
+            onPress={() => {
+              // Every row in EVERY group (open or closed) gets its bullets open, and the
+              // Actionable group is opened so the result is visible — Expand all must never
+              // look like a no-op. Other groups keep their closed state; their rows are
+              // expanded-state too, visible once the person opens them.
+              update($, expanded, () =>
+                [...snap.pinned, ...snap.top, ...snap.gatedRows, ...snap.waitingRows].map(r => r.id))
+              update($, groups, list => (list.includes('actionable') ? list : [...list, 'actionable']))
+            }}
           />
           <Text> </Text>
           <Button
@@ -453,8 +463,6 @@ export const register: Register = on => {
             onPress={() => update($, expanded, () => [])}
           />
         </Box>
-        {pinned.length > 0 && <Text bold>📌 Pinned</Text>}
-        {rowList(ui, snap.style, pinned, look, 'p')}
         {fitted.map(g => (
           <Box key={`group-${g.id}`} flexDirection="column">
             <Button key={`group-${g.id}-title`} plain onPress={() => flipGroup($, g.id)}>
