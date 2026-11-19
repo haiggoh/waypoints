@@ -153,7 +153,8 @@ def test_portable_cli_runs_against_an_isolated_store(tmp_path):
 
 
 def test_zip_is_deterministic_manifest_at_root_and_side_effect_free(tmp_path):
-    before = {str(p.relative_to(PORTABLE)): sha256(p) for p in PORTABLE.rglob("*") if p.is_file()}
+    before = {str(p.relative_to(PORTABLE)): sha256(p) for p in PORTABLE.rglob("*")
+              if p.is_file() and "__pycache__" not in p.parts}  # other xdist workers import portable/
     r1 = run_build("--zip", "--out", str(tmp_path / "a"))
     r2 = run_build("--zip", "--out", str(tmp_path / "b"))
     assert r1.returncode == 0 and r2.returncode == 0
@@ -165,5 +166,6 @@ def test_zip_is_deterministic_manifest_at_root_and_side_effect_free(tmp_path):
     for mod in ("waypoints_core.py", "waypoints_menu.py", "__init__.py"):
         assert mod in names, f"import-closure module missing from zip: {mod}"
     assert not any(n.startswith("portable/") or "\\" in n for n in names)
-    after = {str(p.relative_to(PORTABLE)): sha256(p) for p in PORTABLE.rglob("*") if p.is_file()}
+    after = {str(p.relative_to(PORTABLE)): sha256(p) for p in PORTABLE.rglob("*")
+              if p.is_file() and "__pycache__" not in p.parts}  # other xdist workers import portable/
     assert before == after
