@@ -1625,10 +1625,13 @@ DISPLAY_MODES = ("banner", "pane", "both")
 DISPLAY_DEFAULT = "pane"
 
 
-# Where the panel sits. "top" = very top of the window (0.17.0 default); "bottom" = below the
-# statusline, never above the prompt input; "left"/"right" = docked at that side.
+# Where the queue shows (0.17.0, honest mapping: a mod cannot choose a pane's seat).
+# "left"/"right" = the panel, wherever the surface seats it (docked beside the transcript in
+# the fullscreen layout, the engine picking the side; one line above the prompt otherwise);
+# "top"/"bottom" = no panel, a one-line summary (under the logo notice / under the prompt).
+# Default "right": the panel is present at launch (spec item 1).
 PANE_POSITIONS = ("top", "bottom", "left", "right")
-PANE_POSITION_DEFAULT = "top"
+PANE_POSITION_DEFAULT = "right"
 
 
 def _parse_pane_position(raw):
@@ -1674,8 +1677,9 @@ SETTINGS = {
     "pane-style": ("WAYPOINTS_PANE_STYLE", PANE_STYLE_DEFAULT, _parse_pane_style,
                    "collapsed-row look in the pane: " + " | ".join(PANE_STYLES)),
     "pane-position": ("WAYPOINTS_PANE_POSITION", PANE_POSITION_DEFAULT, _parse_pane_position,
-                      "where the panel sits: top (default, very top of the window) | bottom "
-                      "(below the statusline) | left | right"),
+                      "where the queue shows: right (default) | left = the panel (docked "
+                      "beside the transcript in fullscreen, one line above the prompt "
+                      "otherwise) | top | bottom = a one-line summary, no panel"),
 }
 
 
