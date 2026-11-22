@@ -1,9 +1,13 @@
 # Changelog
 
-## [Unreleased]
+## [0.20.0] — 2026-11-22 — Seat-aware pane launch (terminal opt-in, desktop on by default)
 
-### Changed — seat-aware launch (terminal opt-in, desktop on by default)
+### Changed
 - The pane mod now reads `session.start`'s `surface`: in the desktop apps (Claude desktop Code tab, ChatGPT desktop Codex mode where mods run) the panel still opens at launch in every `display` mode; in the terminal TUI it no longer auto-opens — `/waypoints-pane` opens it on demand. Implements Playbook-seat-aware-pane-mod. Engine mod suite: 30 pass incl. a new terminal-opt-in test.
+
+## [0.20.0] — 2026-11-22
+
+- Seat-aware pane launch (terminal opt-in, desktop on by default)
 
 ## [0.19.0] — 2026-11-19
 
