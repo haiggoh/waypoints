@@ -1,8 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [0.20.1] — 2026-11-22 — waypoints-pane as a markdown command (desktop autocomplete)
 
 - Ship `commands/waypoints-pane.md` so the desktop apps' `/`-autocomplete lists the pane command (previously only the TUI showed mod-registered commands; the desktop suggested only markdown commands). The pane mod still intercepts `command.run` where mods run, so no inference is started there.
+
+## [0.20.1] — 2026-11-22 — Seat-aware pane launch (terminal opt-in, desktop on by default)
+
+- waypoints-pane as a markdown command (desktop autocomplete)
 
 ## [0.20.0] — 2026-11-22 — Seat-aware pane launch (terminal opt-in, desktop on by default)
 
