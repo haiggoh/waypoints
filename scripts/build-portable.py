@@ -67,6 +67,7 @@ COPY_FILES = [
     "scripts/waypoints.py",
     "skills/waypoints/SKILL.md",
     "commands/waypoints-gated.md",
+    "commands/waypoints-pane.md",
 ]
 HOST_TO_PORTABLE = {"scripts/waypoints.py": "bin/waypoints.py"}
 TRANSFORMS = {
@@ -126,6 +127,10 @@ COMPONENTS = [
      "adaptation_class": "mechanical", "evidence_level": "source-inspected",
      "surfaces": {"chat": True, "cowork": True, "code": True},
      "notes": "slash command; CLI reference rewritten bin/ -> scripts/"},
+    {"path": "commands/waypoints-pane.md", "kind": "command",
+     "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
+     "surfaces": {"chat": True, "cowork": True, "code": True},
+     "notes": "slash command doc so the desktop autocomplete lists it; the pane mod intercepts command.run where mods run"},
     {"path": "hooks/hooks.json", "kind": "hooks",
      "adaptation_class": "mechanical", "evidence_level": "source-inspected",
      "surfaces": {"chat": False, "cowork": True, "code": True},
