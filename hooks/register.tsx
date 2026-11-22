@@ -293,9 +293,12 @@ export const register: Register = on => {
     })
     await refresh($)
     const snap = await read($, snapshot)
-    // 0.19.0 seat-driven launch: the pane opens at launch in EVERY display mode; under
-    // display=banner the first render closes it again where the surface will not dock it.
-    if (snap !== null) {
+    // Seat-aware launch (Playbook-seat-aware-pane-mod): the session.start event carries
+    // the surface. Desktop apps (Claude desktop Code tab, ChatGPT desktop Codex mode
+    // where mods run) get the pane ON by default at launch; the terminal TUI keeps it
+    // opt-in — /waypoints-pane opens it on demand there. Under display=banner the first
+    // render still closes an auto-opened pane where the surface will not dock it.
+    if (snap !== null && e.surface === 'desktop') {
       await openPane($, undefined, true)
     }
     $.clock.every(REFRESH_MS, () => refresh($))
