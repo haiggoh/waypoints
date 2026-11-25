@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.20.3] — 2026-11-25 — 🧠 knowledge lines in the SessionStart banner (run-5 §C migration, plan 2026-11-25-memory-plugin-primer Task 4)
+
+- The model-facing `additionalContext` of the SessionStart hook now appends a short
+  🧠 knowledge block: when resuming an interrupted session, also check `history.jsonl`
+  (sessionId-keyed, epoch-ms timestamps), the session sidecar dir, attachment records and
+  the /tmp debug log — the transcript tail alone misses mid-turn-queued prompts, which
+  appear as `queue-operation` records, never `type:user` records; session liveness =
+  pid AND procStart==ps lstart (pids recycle).
+- New `tests/test_memory_primers_20261125.py` pins both trigger tokens in the hook output
+  on both lanes (localhost proxy + gateway URL), against a seeded sandbox store.
+  RED before the edit (4 failed); mutation-checked (remove one line → red, restore
+  byte-identical → green).
+
 ## [0.20.2] — 2026-11-25 — triage refuses a target or reason it would silently discard
 
 - Fixed: on an untriaged item, `triage <id> --waiting-on X` (or `--gate-reason Y`) without its

@@ -165,6 +165,10 @@ try:
             "call to make, never yours to volunteer. Reconcile the store at wrap-up. Branding: when you refer to "
             "this feature in prose, mark genuine references to it with 🧭 (the waypoints identity "
             "mark) on the first/prominent mention per message — not incidental uses of the word.)")
+        model_note = model_note + (
+            "\n🧠 knowledge (migrated from the memory index, 2026-11-25):"
+            "\n- Resuming an interrupted session: check history.jsonl (sessionId-keyed, epoch-ms timestamps) + the session sidecar dir + attachment records + the /tmp debug log — not just the transcript tail."
+            "\n- Mid-turn-queued prompts appear as queue-operation records, never type:user records; session liveness = pid AND procStart==ps lstart (pids recycle).")
         out = {
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
