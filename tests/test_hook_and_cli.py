@@ -405,6 +405,43 @@ def test_triage_refuses_a_gate_reason_on_a_non_gated_tier(tmp_path):
     assert r.returncode == 2 and "refused" in r.stdout
 
 
+# Regression 2026-11-25: on an UNTRIAGED item, a target or reason passed WITHOUT its tier was
+# silently discarded -- set_verdict saw tier None and wiped it -- and the CLI printed
+# "triaged [a] untriaged" with exit 0. The flag must be refused, naming the missing --tier.
+def test_triage_refuses_waiting_on_without_a_tier_on_an_untriaged_item(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "A"], store, "2026-07-12")
+    _run([CLI, "add", "B"], store, "2026-07-12")
+    before = json.loads(store.read_text())["items"][0]
+    r = _run([CLI, "triage", "a", "--waiting-on", "b @ B ships"], store, "2026-07-12")
+    assert r.returncode == 2, (r.returncode, r.stdout)
+    assert "refused" in r.stdout and "--tier waiting" in r.stdout
+    assert json.loads(store.read_text())["items"][0] == before   # nothing written
+
+
+def test_triage_refuses_gate_reason_without_a_tier_on_an_untriaged_item(tmp_path):
+    store = tmp_path / "s.json"
+    _run([CLI, "add", "A"], store, "2026-07-12")
+    before = json.loads(store.read_text())["items"][0]
+    r = _run([CLI, "triage", "a", "--gate-reason", "needs a decision"], store, "2026-07-12")
+    assert r.returncode == 2, (r.returncode, r.stdout)
+    assert "refused" in r.stdout and "--tier gated" in r.stdout
+    assert json.loads(store.read_text())["items"][0] == before
+
+
+def test_triage_retargets_an_already_waiting_item_without_repeating_the_tier(tmp_path):
+    # The legitimate tier-less form: the item is ALREADY waiting, so the new target applies.
+    store = tmp_path / "s.json"
+    for t in ("A", "B", "C"):
+        _run([CLI, "add", t], store, "2026-07-12")
+    _run([CLI, "triage", "a", "--tier", "waiting", "--waiting-on", "b @ B ships"],
+         store, "2026-07-12")
+    r = _run([CLI, "triage", "a", "--waiting-on", "c @ C ships"], store, "2026-07-12")
+    assert r.returncode == 0, r.stdout
+    saved = json.loads(store.read_text())["items"][0]
+    assert saved["tier"] == "waiting" and saved["waiting_on"] == ["c @ C ships"]
+
+
 def test_triage_clear_returns_an_item_to_untriaged(tmp_path):
     store = tmp_path / "s.json"
     _run([CLI, "add", "A"], store, "2026-07-12")

@@ -891,6 +891,16 @@ def set_verdict(items, item_id, tier=_UNSET, gate_reason=_UNSET, waiting_on=_UNS
     else:
         new_waiting = waiting_on
     if new_tier is None:
+        # An EXPLICIT reason/target landing on no tier is a request that cannot be honoured.
+        # Wiping it here (the pre-0.20.2 behaviour) reported success while storing nothing, so
+        # refuse it and name the tier that would make it valid. An explicit tier=None (--clear)
+        # never carries one: the CLI refuses that combination before it gets here.
+        if waiting_on is not _UNSET and waiting_on:
+            raise VerdictError("a waiting target needs its tier: pass --tier %s with "
+                               "--waiting-on (this item has no tier yet)" % (WAITING,))
+        if gate_reason is not _UNSET and gate_reason:
+            raise VerdictError("a gate reason needs its tier: pass --tier %s with "
+                               "--gate-reason (this item has no tier yet)" % (GATED,))
         new_reason = None
         new_waiting = None
     _t, _g, new_waiting = validate_verdict(new_tier, new_reason, new_waiting)

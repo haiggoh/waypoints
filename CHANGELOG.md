@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.20.2] — 2026-11-25 — triage refuses a target or reason it would silently discard
+
+- Fixed: on an untriaged item, `triage <id> --waiting-on X` (or `--gate-reason Y`) without its
+  `--tier` stored nothing, printed `triaged [<id>] untriaged` and exited 0. `set_verdict` now
+  refuses it (exit 2, `refused: … pass --tier waiting|gated …`), so the store is left untouched
+  and the message names the missing flag. Retargeting an item that is ALREADY waiting/gated
+  without repeating its tier still works.
+- Tests: 3 CLI-level cases in `tests/test_hook_and_cli.py` (2 red first, both guards
+  mutation-checked; 1 positive control for the legitimate tier-less retarget).
+
 ## [0.20.1] — 2026-11-22 — waypoints-pane as a markdown command (desktop autocomplete)
 
 - Ship `commands/waypoints-pane.md` so the desktop apps' `/`-autocomplete lists the pane command (previously only the TUI showed mod-registered commands; the desktop suggested only markdown commands). The pane mod still intercepts `command.run` where mods run, so no inference is started there.
