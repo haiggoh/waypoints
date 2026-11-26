@@ -148,7 +148,7 @@
     }
   ],
   "files": {
-    ".claude-plugin/plugin.json": "a9760a60c9f2800fc38a7d3c5ce2d6bfbf843e781d96466d7b7acf9fb7d660b1",
+    ".claude-plugin/plugin.json": "0bb26806cae4a8d848cc79fc9b8092fb6c0a4699aae8252b0c0dbad1b4748482",
     "__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "commands/waypoints-gated.md": "e4263c13311c26fb54a8085fd4481f7ceb1199703d74c12b121813513e01ba19",
     "commands/waypoints-pane.md": "36f1073032926c0b4bce4ba0b951b575a8f01cb7e8013c93863a57d5e427ad93",
@@ -162,7 +162,7 @@
     "waypoints_menu.py": "5a3e97ebfdc61f73cb09b73beb1d6b47c264050fa45ef4a2faa8b6f8bd8481b9"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "5e856fa595bea610a17835346f703f9978b10b65",
+  "source_commit": "fc98c067e88048cdea831acfc0ec31ed88bf8800",
   "source_repo": "haiggoh/waypoints",
   "transform_version": "1"
 }

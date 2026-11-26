@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.20.4] — 2026-11-26 — CHANGELOG: remove duplicate stub entries for 0.20.1 and 0.20.0
+
+### Fixed
+
+- The CHANGELOG carried two stub blocks that only restated titles: a second
+  `## [0.20.1] — 2026-11-22 — Seat-aware pane launch …` heading with the single bullet
+  `- waypoints-pane as a markdown command (desktop autocomplete)`, and a title-less
+  `## [0.20.0] — 2026-11-22` heading with the single bullet
+  `- Seat-aware pane launch (terminal opt-in, desktop on by default)` (2026-11-25).
+  Both deleted; the real 0.20.1 and 0.20.0 entries stay. Caught by the new
+  run-to-completion 1.6.4 ship door, which HARD-fails a ship whose CHANGELOG duplicates
+  a released heading.
+
 ## [0.20.3] — 2026-11-25 — 🧠 knowledge lines in the SessionStart banner (run-5 §C migration, plan 2026-11-25-memory-plugin-primer Task 4)
 
 - The model-facing `additionalContext` of the SessionStart hook now appends a short
@@ -27,18 +40,10 @@
 
 - Ship `commands/waypoints-pane.md` so the desktop apps' `/`-autocomplete lists the pane command (previously only the TUI showed mod-registered commands; the desktop suggested only markdown commands). The pane mod still intercepts `command.run` where mods run, so no inference is started there.
 
-## [0.20.1] — 2026-11-22 — Seat-aware pane launch (terminal opt-in, desktop on by default)
-
-- waypoints-pane as a markdown command (desktop autocomplete)
-
 ## [0.20.0] — 2026-11-22 — Seat-aware pane launch (terminal opt-in, desktop on by default)
 
 ### Changed
 - The pane mod now reads `session.start`'s `surface`: in the desktop apps (Claude desktop Code tab, ChatGPT desktop Codex mode where mods run) the panel still opens at launch in every `display` mode; in the terminal TUI it no longer auto-opens — `/waypoints-pane` opens it on demand. Implements Playbook-seat-aware-pane-mod. Engine mod suite: 30 pass incl. a new terminal-opt-in test.
-
-## [0.20.0] — 2026-11-22
-
-- Seat-aware pane launch (terminal opt-in, desktop on by default)
 
 ## [0.19.0] — 2026-11-19
 
